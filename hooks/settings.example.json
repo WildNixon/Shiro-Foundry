@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "F=\"$CLAUDE_PROJECT_DIR/.claude/hooks/no_python_stdin.py\"; P=\"<python>\"; [ ! -f \"$F\" ] || { command -v \"$P\" >/dev/null 2>&1 || { echo \"no_python_stdin hook inactive: interpreter $P is missing\" >&2; exit 1; }; \"$P\" \"$F\"; }",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "F=\"$CLAUDE_PROJECT_DIR/.claude/hooks/graph_readonly.py\"; P=\"<python>\"; [ ! -f \"$F\" ] || { command -v \"$P\" >/dev/null 2>&1 || { echo \"graph_readonly hook inactive: interpreter $P is missing\" >&2; exit 1; }; \"$P\" \"$F\"; }",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

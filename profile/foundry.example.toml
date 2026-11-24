@@ -1,0 +1,95 @@
+# .foundry/foundry.toml: this project's profile.
+# Every key is optional; what you leave out takes the default shown here.
+# `python scripts/foundry/foundry_profile.py show` prints the profile in force.
+
+project = "My Project"          # as people say it
+crew = "myproject"              # short, lower case: this crew's name when lessons carry between crews
+badge_prefix = "FB1"            # the first word of every badge line
+main_branch = "main"
+
+[commands]
+python = ""                     # the interpreter briefs name; empty: the one running the tool
+                                # set a full path when the bare `python` on this host is not the one you want
+test = ""                       # the project's own test command; every builder's brief names it (e.g. "pytest -q")
+
+[paths]                         # relative to the main checkout
+tools = "scripts/foundry"
+office = "out/foundry"          # the crew office: badges, the time clock, the journal. Must be git-ignored
+state = "docs/progress/state.json"
+map = "docs/progress-map.html"
+roadmap = "docs/ROADMAP.md"
+flow = "docs/flow"              # the road graph and the plan files (checked in)
+flow_out = "out/flow"           # built chart pages (git-ignored)
+reviews = "docs/reviews"
+research = "docs/research"
+handoff = "docs/handoff"
+decisions = "docs/decisions"
+gym = "gym"                     # series/, prereg/, contracts/, charts/, grades/, lanes/
+rules = ".foundry/rules.md"
+
+[slots]                         # the rota: when each slot starts (local time)
+day = "06:00"
+swing = "14:00"
+night = "22:00"
+round_every = "2h"              # how often the manager sets its round timer (a rule for the manager; no tool reads it)
+review_window_min = 90          # the research-and-review window the manager writes into the rota (no tool reads it)
+
+[limits]                        # every number here is the user's
+usage_stop = 80                 # percent of the plan's weekly usage at which the manager stops and asks
+crew_max = 4                    # the headcount the starter shift gets; after that each shift names its own
+stale_min = 45                  # an employee silent this long reads STALE
+overdue_min = 15                # this far past its finish reads OVERDUE
+manager_stale_min = 120
+
+[resource]                      # the one thing the crew must share. Leave name empty when there is none
+name = ""                       # e.g. "the dev VM", "GPU 0", "the test phone"
+seats = ["main"]                # how many jobs it takes at once, each by name
+seat_env = "FOUNDRY_SEAT"       # a queued command reads its seat from this variable
+seats_env = "FOUNDRY_SEATS"     # every seat held, for a job that takes the whole resource
+prepare = ""                    # a command run in the seat before each job (clean what the last holder left)
+exclusive = ""                  # a regex: jobs whose text matches never hold seats at the same time
+status = ""                     # a command that prints the resource's own health (disk, memory)
+default_max = "30m"
+
+[measure]                       # how "done" is decided
+done_means = "the milestone's gym lane says PASS"
+lane_pattern = '\bG\d+\b'       # how a lane's name looks in text
+counted = ""                    # the command of a counted run, with <lane>; e.g. "python gym/run.py counted <lane>"
+dev = ""                        # the command of a dev (uncounted) run
+sweep = ""                      # the command that runs every lane, if there is one
+selftest = ""                   # the gym's own selftest
+grader_owned = ["gym/prereg", "gym/lanes", "gym/run.py"]   # only a grader writes these
+records = ["gym/series", "gym/charts", "gym/grades"]       # a run's records
+handin_check = ""               # a command office.py handin runs when a branch changes handin_check_paths
+handin_check_paths = []         # globs, e.g. ["src/**"]
+vendored_paths = []             # globs a badge should not own without saying so
+
+[roadmap]                       # the shape of ROADMAP.md's ids
+requirement_id = '[A-Z0-9]+-\d+'
+tiers = ["P0", "P1", "P2"]
+stage_id = 'R\d'
+milestone_id = 'M\d+'
+decision_id = 'D\d+'
+goal = "1.0"                    # what the road leads to, as the pages say it
+
+[git]
+push = false                    # a rule the skills follow: the crew never pushes unless this is true (no tool enforces it)
+merge = "cherry-pick by commit"
+worktrees = ".claude/worktrees"
+
+[models]                        # title -> model id; a title left out runs on the session's own model
+# builder = "claude-opus-5-5"
+# reviewer = "claude-sonnet-5-5"
+
+# A title whose work gets a heavy review: its sessions run on this model and its commits carry the trailer.
+# [flagged.security-fixer]
+# model = "claude-opus-5-5"
+# trailer = "Built-by: claude-opus-5-5 (security fix; heavy review)"
+
+# Other crews that work this way. A lesson this crew's journal marks `carry --to other` reaches their outbox,
+# and `journal.py take` reads theirs from the path named here.
+# [crews.other]
+# lessons = "D:/other-project/out/foundry/journal/carry-myproject.jsonl"
+
+[hooks]
+protect = ["docs/flow/road.graph.json", "docs/flow/road.edits.jsonl"]   # files only a tool may write
