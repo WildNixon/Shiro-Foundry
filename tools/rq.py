@@ -6,7 +6,8 @@ The resource and its seats are named in the profile ([resource] name, seats). Th
 seat per line, overrides the profile's list when present. The first seat (the first of the profile's
 resource.seats) uses the office files rq.lock and rq.last; another seat S uses rq.lock.S and rq.last.S.
 
-  rq.py run --id EMP-07 --job "unit tests + lint" --touched "src/app src/core" [--prio 5] -- <command>
+  rq.py run --id EMP-07 --job "unit tests + lint" --touched "src/app src/core" [--prio 5] [--max 30m] [--wait 4h]
+            [--seat NAME | --all-seats] [--exclusive] [--no-prepare] [--enforce-max] -- <command>
       The preferred way. Queues for any free seat, runs the profile's resource.prepare line there (if one is set),
       runs <command> (a shell command line) with the seat's name in the variable resource.seat_env names (default
       FOUNDRY_SEAT), then releases the seat with an rq.last note naming --touched, whatever the command's exit.
@@ -17,8 +18,9 @@ resource.seats) uses the office files rq.lock and rq.last; another seat S uses r
   rq.py release --id EMP-07 --note "what ran" --touched "src/app src/core"
   rq.py leave --id EMP-07              take a waiter out of the queue; its waiting process exits 6 at its next poll
                                        (a hold is freed with release, or force-release by the manager)
-  rq.py status [--resource]            (--resource also runs the profile's resource.status command and prints what
-                                       it says: the resource's own health, read without taking a seat)
+  rq.py status [--resource] [--json]   (--resource also runs the profile's resource.status command and prints what
+                                       it says: the resource's own health, read without taking a seat; --json
+                                       prints one JSON object for other tools, see below)
   rq.py force-release --by MGR-01 --note "why" [--seat NAME]      (the manager only)
   rq.py selftest                       the rules below, on scratch seats in a temp folder
 
@@ -29,6 +31,29 @@ waiter takes only its own seat, so it never blocks a `run` waiter behind it. Hol
 (30 minutes) unless --max says otherwise; status marks a longer hold OVERDUE. A waiter that stops polling for 2
 minutes drops out of the queue.
 
+Times carry a unit: --max and --wait take 90s, 30m, 2h or a compound 4h30m, and refuse a bare number (exit 2),
+because a bare number means seconds to one tool and minutes to the next, and a "120" meant as two hours becomes a
+two-minute hold. A zero time (0s) is refused too (exit 2).
+
+Stopping a `run`: an interrupt (Ctrl+C), TERM or HUP where the platform has them, or on Windows BREAK (Ctrl+Break,
+a CTRL_BREAK_EVENT) ends the job with everything it started (every job's shell runs as a process group of its own;
+on Windows in a job object), releases the seat with an rq.last note saying so, and exits 130 or 128 + the signal's
+number. A stop while `run` still waits takes it out of the queue. A KILL (or Windows' TerminateProcess) cannot be
+caught: the job runs on and the seat stays held until the manager's force-release.
+
+Enforcing --max is opt-in: resource.enforce_max = true in the profile, or `run --enforce-max` for one job. When
+on, a `run` job (its prepare line included) still going at its --max plus a grace (resource.max_grace, default
+"2m") is ended with everything it started (on Windows the job runs in a job object that is ended whole, then
+`taskkill /T /F` on the shell's pid; elsewhere the shell's process group gets TERM and, a few seconds later, KILL,
+whether or not the shell itself has ended by then), its seat is released with an rq.last note saying it was ended
+at its limit, and `run` exits 124. Off, nothing ends a job: a long hold only reads OVERDUE. A `take` hold is never ended.
+
+status --json prints one object: {"resource", "now", "enforce_max", "seats": [{"seat", "holder", "job", "since",
+"max", "overdue", "all", "exclusive", "prio", "via"}] (holder null when the seat is free), "queue": the waiters in
+order [{"id", "job", "prio", "at", "wants" ("all", "any" or a seat's name), "max", "exclusive"}], "counted":
+{"holding": [ids], "waiting": [ids]}}. A counted run or sweep is known by its id, <badge id>-sweep or
+<badge id>-counted[-<lane>], the shape the office and the board read. Times are seconds since the epoch.
+
 Exclusive jobs: some jobs cannot share the resource even from different seats (two harnesses that stop programs by
 name in one machine stop each other's). resource.exclusive is a regex: a job whose --job text or command matches it
 (or that passes --exclusive) is an exclusive job, and only one exclusive job holds a seat at a time; other jobs pass
@@ -37,9 +62,9 @@ it in the queue. An empty regex means no such rule.
 Whole-resource jobs: `run --all-seats` (counted runs, and runs that must hold every seat because the seats share
 state) waits until every seat is free and then holds them all. Behind it, a waiter takes a free seat meanwhile only
 when its --max is 30 minutes or less and ends before the last busy seat's hold reaches its --max (a backfill): a
-short test job runs while a long job finishes. --max is not enforced, so if the busy job ends early, the
-whole-resource job can wait up to 30 minutes for the backfill, longer if the backfill overruns its own --max (status
-then shows it OVERDUE). The command runs in the first seat, with the variable resource.seats_env names (default
+short test job runs while a long job finishes. If the busy job ends early, the whole-resource job can wait up to
+30 minutes for the backfill, longer if the backfill overruns its own --max and --max is not enforced (status then
+shows it OVERDUE). The command runs in the first seat, with the variable resource.seats_env names (default
 FOUNDRY_SEATS) listing every seat held, and release frees them all. A whole-resource job keeps its place: a job
 queued within 5 minutes of its own id's release, after the whole-resource job queued, never backfills ahead of it (a
 re-queue goes behind it), and once the whole-resource job has waited 60 minutes nothing backfills.
@@ -84,6 +109,15 @@ REQUEUE_GAP = 5 * 60  # a job queued this soon after its id's release is a re-qu
 ALL_AGE = 60 * 60  # a whole-resource job that has waited this long gets no more backfills ahead of it
 HOLD_TOKEN = None  # set by take(): this process's own holds carry it in hold.json, and run() releases only those
 TOUCHED = "touched: "  # the second line of rq.last: what the holder said it touched
+RUNNING = "rq: running in seat"  # how the line `run` prints starts, once it holds a seat and starts the job's
+#                                  command; sweep.py reads a lane's log for it: with no such line the lane was not run
+STARTED = "rq: started"  # the line `run` prints after the job's shell was started (RUNNING is printed before)
+FINISHED = "rq: finished exit"  # ... and the one when the command ended by itself, with its exit code. Both end
+#                                 with [<token>], the caller's FOUNDRY_RQ_TOKEN (empty when none was given): a job
+#                                 that was ended at its limit or stopped has a `started` line and no `finished` one
+TOKEN_ENV = "FOUNDRY_RQ_TOKEN"  # read by `run`, taken out of the job's environment
+KILL_GRACE = 5  # seconds between TERM and KILL when a job's process group is ended
+QUEUED = False  # set by take() once this process has put its own entry in the queue
 
 
 def office():
@@ -173,25 +207,78 @@ def is_exclusive(e):
 DUR = re.compile(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?")
 
 
+UNIT_HINT = "write a unit: 90s, 30m, 2h, 4h30m"
+# A counted run or sweep by its queue id: <badge id>-sweep or <badge id>-counted[-<lane>] (office.py reads the same
+# shape; a dry run's EMP-5-dry-sweep does not match).
+COUNTED_ID = re.compile(r"[A-Z]+-\d+-(?:sweep|counted(?:-[0-9A-Z]+)?)", re.I)
+
+
+def seconds(s):
+    """A time with its unit, in seconds: 30m, 2h, 90s, or a compound 4h30m / 1h15m30s. A bare number is refused:
+    it is seconds to one reader and minutes to the next."""
+    s = str(s).strip().lower()
+    m = DUR.fullmatch(s)
+    if not s or not m or not any(m.groups()):
+        if s.replace(".", "", 1).isdigit():
+            raise ValueError(f"{s!r} has no unit; {UNIT_HINT}")
+        raise ValueError(f"invalid duration {s!r}; {UNIT_HINT}")
+    h, mi, se = (float(x) if x else 0.0 for x in m.groups())
+    return int(h * 3600 + mi * 60 + se)
+
+
 def dur(s):
-    """30m, 2h, 90s, a bare number of seconds, or a compound 4h30m / 1h15m30s."""
-    s = s.strip().lower()
-    if s.replace(".", "", 1).isdigit():
-        v = int(float(s))
-    else:
-        m = DUR.fullmatch(s)
-        if not s or not m or not any(m.groups()):
-            raise ValueError(f"invalid duration {s!r}: write 30m, 2h, 4h30m or 90s")
-        h, mi, se = (float(x) if x else 0.0 for x in m.groups())
-        v = int(h * 3600 + mi * 60 + se)
-    return v if v > 0 else 1800
+    """seconds(), for a hold or a wait: a zero length is refused (it used to become 30 minutes without a word)."""
+    v = seconds(s)
+    if v <= 0:
+        raise ValueError(f"{str(s).strip()!r} is no time at all: a hold or a wait is longer than zero; {UNIT_HINT}")
+    return v
+
+
+def dur_arg(s):
+    """dur() for argparse, so the refusal prints its own words (exit 2)."""
+    try:
+        return dur(s)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e))
+
+
+def span(sec):
+    """Seconds as a time with units: 5400 -> 1h30m, 90 -> 1m30s, 0 -> 0s."""
+    sec = int(sec)
+    h, m, s = sec // 3600, sec % 3600 // 60, sec % 60
+    return "".join(f"{v}{u}" for v, u in ((h, "h"), (m, "m"), (s, "s")) if v) or "0s"
+
+
+_SAID = set()
+
+
+def _profile_time(key, default):
+    """A time from the [resource] table; one that cannot be read is said once on stderr and the default stands."""
+    raw = RES.get(key)
+    if raw is None or raw == "":
+        return seconds(default)
+    try:
+        return seconds(raw)
+    except ValueError as e:
+        if key not in _SAID:
+            _SAID.add(key)
+            print(f"rq: resource.{key} in the profile: {e}; using {default}", file=sys.stderr)
+        return seconds(default)
 
 
 def default_max():
-    try:
-        return dur(str(RES.get("default_max") or "30m"))
-    except ValueError:
-        return 1800
+    return _profile_time("default_max", "30m") or 1800
+
+
+def max_grace():
+    """How long past its --max an enforced job may still run (resource.max_grace, default 2m; 0s is allowed)."""
+    return _profile_time("max_grace", "2m")
+
+
+def enforcing(a=None):
+    """True when --max is enforced: resource.enforce_max in the profile, or this run's --enforce-max."""
+    v = RES.get("enforce_max")
+    return bool(getattr(a, "enforce_max", False) or v is True or str(v).strip().lower() in ("1", "true", "yes", "on"))
 
 
 def cmd_line(cmd):
@@ -309,8 +396,8 @@ def allocate(q, now=None):
             continue
         if until is not None and not (e.get("max") and e["max"] <= BACKFILL_MAX and now + e["max"] <= until):
             # an entry with no --max recorded, one past BACKFILL_MAX, or one that would outlast the busy seats'
-            # holds waits. --max is not enforced, so the cap bounds how long a backfill can delay the
-            # whole-resource job once the seats free
+            # holds waits. --max is enforced only when the project turns that on, so the cap bounds how long a
+            # backfill can delay the whole-resource job once the seats free
             continue
         if excl_busy and is_exclusive(e):
             continue
@@ -336,7 +423,7 @@ def take(a, any_seat=False, via="take"):
     excl = bool(getattr(a, "exclusive", False)
                 or names_exclusive(a.job + " " + " ".join(getattr(a, "cmd", None) or [])))
     seat_env = str(RES.get("seat_env") or "FOUNDRY_SEAT")
-    global HOLD_TOKEN
+    global HOLD_TOKEN, QUEUED
     with Mutex():
         try:
             rq = json.loads(requeue_file().read_text(encoding="utf-8"))
@@ -387,6 +474,7 @@ def take(a, any_seat=False, via="take"):
             e["lane"] = seat_req
         q.append(e)
         write_queue(q)
+        QUEUED = True
     how = "every seat" if e.get("all") else ("any seat" if any_seat else "seat " + seat_req)
     print(f"rq: {a.id} queued at {hhmm(t0)} (prio {a.prio}, {how}"
           f"{', exclusive: one at a time across seats' if excl else ''}): {a.job}", flush=True)
@@ -425,15 +513,15 @@ def take(a, any_seat=False, via="take"):
                 seat = held[0]
                 last = last_of(seat)
                 print(f"rq: {a.id} holds seat{'s ' + ', '.join(held) if len(held) > 1 else ' ' + seat} "
-                      f"({seat_env}={seat}) from {hhmm(now)} for up to {a.max // 60} "
-                      f"min (waited {int(now - t0) // 60} min). {last.name}:", flush=True)
+                      f"({seat_env}={seat}) from {hhmm(now)} for up to {brief(a.max)} "
+                      f"(waited {brief(now - t0)}). {last.name}:", flush=True)
                 print(last.read_text(encoding="utf-8") if last.exists() else "(none)", flush=True)
                 return 0, seat
             write_queue(q)
         if now - t0 > a.wait:
             with Mutex():
                 write_queue([e for e in read_queue() if e["id"] != a.id])
-            print(f"rq: {a.id} not taken within {a.wait // 60} min; left the queue", flush=True)
+            print(f"rq: {a.id} not taken within {brief(a.wait)}; left the queue", flush=True)
             return 6, None
         time.sleep(POLL)
 
@@ -558,17 +646,210 @@ def shell():
     return found or on_path("sh") or "bash"
 
 
+def win_job(proc):
+    """Windows: put a just-started process in a job object of its own and return the job's handle (None when that
+    cannot be done). What the process starts from then on is in the job too, whoever its parent is: a shell there
+    can start a program through a helper that exits, and then no walk of parent ids (taskkill /T) finds the program."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.CreateJobObjectW.restype = wintypes.HANDLE
+        k.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k.AssignProcessToJobObject.restype = wintypes.BOOL
+        k.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        job = k.CreateJobObjectW(None, None)
+        if not job:
+            return None
+        if not k.AssignProcessToJobObject(job, int(proc._handle)):
+            k.CloseHandle(job)
+            return None
+        return job
+    except Exception:
+        return None
+
+
+def win_job_end(job, close_only=False):
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        if not close_only:
+            k.TerminateJobObject(job, 124)
+        k.CloseHandle(job)
+    except Exception:
+        pass
+
+
+def end_tree(proc, job=None):
+    """End a job's shell and everything it started: on Windows its job object (when there is one) and the tree under
+    the shell's pid; elsewhere the process group the shell leads (run_line starts every job's shell as one). Never
+    raises."""
+    try:
+        if os.name == "nt":
+            if job:
+                win_job_end(job)
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+        else:
+            import signal
+            # TERM to the group, then KILL to the group after the grace whether or not the shell itself has ended: a
+            # child that ignores TERM must not outlive the seat. The KILL is left out only when the group is seen
+            # empty first.
+            gone = False
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                end = time.time() + KILL_GRACE
+                while time.time() < end:
+                    proc.poll()  # reap the shell, so an ended shell does not keep the group looking alive
+                    os.killpg(proc.pid, 0)
+                    time.sleep(0.1)
+            except ProcessLookupError:
+                gone = True
+            except OSError:
+                pass
+            if not gone:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except OSError:  # ProcessLookupError among them: the group ended in the meantime
+                    pass
+    except (OSError, subprocess.SubprocessError):
+        pass
+    try:
+        proc.wait(timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def stop_signals():
+    """The signals that ask this process to stop, beyond the keyboard's interrupt, on this platform: TERM and HUP
+    where the platform has them, and on Windows BREAK (Ctrl+Break, or a CTRL_BREAK_EVENT sent to the process group:
+    the one stop a Windows process can be sent and still clean up after)."""
+    import signal
+    names = ("SIGBREAK", "SIGTERM") if os.name == "nt" else ("SIGTERM", "SIGHUP")
+    return [getattr(signal, n) for n in names if hasattr(signal, n)]
+
+
+def quiet_signals():
+    """Ignore the keyboard's interrupt and every stop signal from here on, so a second one cannot cut a cleanup
+    (a seat's release, a freeze's lift) short. Never raises."""
+    import signal
+    for sig in [signal.SIGINT] + stop_signals():
+        try:
+            signal.signal(sig, signal.SIG_IGN)
+        except (OSError, ValueError, RuntimeError):
+            pass
+
+
+def on_stop_signals():
+    """Make a stop signal end this process the way an exception does, so every `finally` runs: TERM, HUP or BREAK
+    raises SystemExit(128 + the signal's number), the keyboard's interrupt raises KeyboardInterrupt as ever. The
+    first one to arrive turns the others off (quiet_signals). Outside the main thread nothing is installed."""
+    import signal
+
+    def stop(signum, _frame):
+        quiet_signals()
+        if signum == signal.SIGINT:
+            raise KeyboardInterrupt
+        raise SystemExit(128 + signum)
+
+    for sig in [signal.SIGINT] + stop_signals():
+        try:
+            signal.signal(sig, stop)
+        except (OSError, ValueError, RuntimeError):
+            pass
+
+
+def started_line(token):
+    """The line `run` prints once the job's shell has been started (the Popen succeeded)."""
+    return f"{STARTED} [{token}]"
+
+
+def finished_line(code, token):
+    """The line `run` prints when the job's command ended by itself, with its own exit code."""
+    return f"{FINISHED} {code} [{token}]"
+
+
+def brief(sec):
+    """A length for a status line: whole minutes, and seconds below one minute (45 s, not 0 min)."""
+    sec = int(sec)
+    return f"{sec // 60} min" if sec >= 60 else f"{max(sec, 0)} s"
+
+
+def run_line(sh, line, env, deadline=None, said=None):
+    """Run one shell line; (exit code, ended at its limit). The line runs as its own process group (a session of its
+    own; on Windows a job object), so it can be ended with everything it started. With no deadline nothing ends it
+    but a stop of this process. With one, it is ended, tree and all, when the deadline passes: the exit code is then
+    124. An interrupt or a stop signal that reaches this process ends the line, tree and all, before it is passed
+    on. (A line in a session of its own does not get the terminal's Ctrl+C itself: this process gets it and ends
+    the line.) `said` is printed once the shell has been started, and not when it could not be."""
+    proc = subprocess.Popen([sh, "-c", line], env=env, **({} if os.name == "nt" else {"start_new_session": True}))
+    job = win_job(proc) if os.name == "nt" else None
+    try:
+        if said:
+            print(said, flush=True)
+        while True:
+            left = 1.0 if deadline is None else deadline - time.time()
+            if left <= 0:
+                end_tree(proc, job)
+                return 124, True
+            try:
+                code = proc.wait(timeout=min(left, 1.0))
+                if job:
+                    win_job_end(job, close_only=True)
+                return code, False
+            except subprocess.TimeoutExpired:
+                continue
+    except BaseException:  # an interrupt of this process must not leave the job running
+        quiet_signals()
+        end_tree(proc, job)
+        raise
+
+
+def drop_own(who):
+    """After a stop while queueing: take this process's own queue entry out and free the holds it took. Never
+    raises."""
+    try:
+        if QUEUED:
+            with Mutex():
+                write_queue([e for e in read_queue() if e["id"] != who])
+        if HOLD_TOKEN and any((holder(s) or {}).get("token") == HOLD_TOKEN for s in seats()):
+            do_release(who, "stopped before its job started", "", token=HOLD_TOKEN)
+    except (Exception, SystemExit):
+        pass
+
+
 def run(a):
     if not a.cmd:
         print("rq: run needs a command after --")
         return 2
-    rc, seat = take(a, any_seat=not a.seat, via="run")
+    on_stop_signals()  # a TERM, HUP or BREAK now ends the job and releases the seat, as an interrupt does
+    try:
+        rc, seat = take(a, any_seat=not a.seat, via="run")
+    except BaseException:
+        quiet_signals()
+        drop_own(a.id)
+        raise
     if rc:
         return rc
-    code = 1
+    code, ended, deadline, cut_by = 1, False, None, ""
+    if enforcing(a):
+        grace = max_grace()
+        deadline = ((holder(seat) or {}).get("since") or time.time()) + a.max + grace
+        print(f"rq: --max is enforced: the job is ended at {time.strftime('%H:%M:%S', time.localtime(deadline))} "
+              f"({span(a.max)} plus {span(grace)} grace) if it still runs", flush=True)
     try:
         prev_id, prev_note, prev_touched = last_parts(seat)
         env = dict(os.environ)
+        # the caller's token marks this run's own `started` and `finished` lines; the job is not given it, so
+        # nothing the job prints can pass for them
+        token = env.pop(TOKEN_ENV, "")
         env[str(RES.get("seat_env") or "FOUNDRY_SEAT")] = seat
         env[str(RES.get("seats_env") or "FOUNDRY_SEATS")] = ",".join(
             s for s in seats() if (holder(s) or {}).get("id") == a.id)
@@ -576,22 +857,48 @@ def run(a):
         sh = shell()
         if prepare and not a.no_prepare:
             print(f"rq: preparing seat {seat}: {prepare}", flush=True)
-            prc = subprocess.run([sh, "-c", prepare], env=dict(
+            prc, ended = run_line(sh, prepare, dict(
                 env, FOUNDRY_JOB_ID=a.id, FOUNDRY_TOUCHED=a.touched, FOUNDRY_LAST_HOLDER=prev_id,
-                FOUNDRY_LAST_NOTE=prev_note, FOUNDRY_LAST_TOUCHED=prev_touched)).returncode
-            if prc:
+                FOUNDRY_LAST_NOTE=prev_note, FOUNDRY_LAST_TOUCHED=prev_touched), deadline)
+            if prc and not ended:
                 print(f"rq: the prepare line exited {prc}; the job runs all the same", flush=True)
-        line = cmd_line(a.cmd)
-        print(f"rq: running in seat {seat}: {line}", flush=True)
-        code = subprocess.run([sh, "-c", line], env=env).returncode
+        if ended:
+            code = 124
+        else:
+            line = cmd_line(a.cmd)
+            print(f"{RUNNING} {seat}: {line}", flush=True)
+            code, ended = run_line(sh, line, env, deadline, said=started_line(token))
+            if not ended and 0 <= code <= 255:
+                print(finished_line(code, token), flush=True)
+        if ended:
+            print(f"rq: {a.id}'s job was still running at its limit ({span(a.max)} plus {span(max_grace())} grace) "
+                  "and was ended with what it started; exit 124. A counted run it was in is VOID: not run.", flush=True)
     except OSError as e:
         print(f"rq: cannot start the shell ({e}); set resource.shell in the profile", flush=True)
         code = 127
+    except (KeyboardInterrupt, SystemExit) as e:
+        quiet_signals()
+        if isinstance(e, SystemExit) and not (isinstance(e.code, int) and e.code > 128):
+            raise  # not a stop signal's exit (the queue's own refusal, say): the note below carries the exit code
+        sig = e.code - 128 if isinstance(e, SystemExit) else 0
+        cut_by = f"signal {sig}" if sig else "an interrupt"
+        code = 128 + sig if sig else 130
+        print(f"rq: {a.id}'s job was stopped by {cut_by} sent to the queue; it was ended and its seat is released. "
+              "A counted run it was in is VOID: not run.", flush=True)
+        raise
     finally:
+        quiet_signals()
         # A code outside 0..255 is a platform status (the host shut down, the job was interrupted), not the command's
         # own exit: the run was cut off, and a counted run it was in is VOID: not run.
         cut = f" = 0x{code & 0xFFFFFFFF:08X}: killed, not finished (host shutdown or reboot?)" if not 0 <= code <= 255 else ""
-        do_release(a.id, f"{a.job} (exit {code}{cut})", a.touched, token=HOLD_TOKEN)
+        if ended:
+            note = (f"{a.job} (ended at its limit: still running at --max {span(a.max)} plus {span(max_grace())} "
+                    "grace; exit 124; what it left in the seat is unknown)")
+        elif cut_by:
+            note = f"{a.job} (stopped by {cut_by} sent to the queue; what it left in the seat is unknown)"
+        else:
+            note = f"{a.job} (exit {code}{cut})"
+        do_release(a.id, note, a.touched, token=HOLD_TOKEN)
     return code
 
 
@@ -625,8 +932,39 @@ def resource_status():
     return (out or "(no output)") + ("" if r.returncode == 0 else f"\n(the status command exited {r.returncode})")
 
 
+def status_facts(now=None):
+    """What status --json prints: the seats, the waiters in order, and the counted runs holding or waiting."""
+    now = time.time() if now is None else now
+    out = {"resource": str(RES.get("name") or ""), "now": now, "enforce_max": enforcing(), "seats": [], "queue": [],
+           "counted": {"holding": [], "waiting": []}}
+    for seat in seats():
+        h = holder(seat)
+        if h is None:
+            out["seats"].append({"seat": seat, "holder": None})
+            continue
+        since, mx = h.get("since", now), h.get("max", 1800) or 1800
+        out["seats"].append({"seat": seat, "holder": h["id"], "job": h.get("job", ""), "since": since, "max": mx,
+                             "overdue": now - since > mx, "all": bool(h.get("all")), "exclusive": is_exclusive(h),
+                             "prio": h.get("prio"), "via": h.get("via")})
+        if COUNTED_ID.fullmatch(str(h["id"])) and h["id"] not in out["counted"]["holding"]:
+            out["counted"]["holding"].append(h["id"])
+    for e in live(read_queue(), now):
+        out["queue"].append({"id": e["id"], "job": e.get("job", ""), "prio": e["prio"], "at": e["at"],
+                             "wants": "all" if e.get("all") else "any" if e.get("any") else e.get("lane", first()),
+                             "max": e.get("max"), "exclusive": is_exclusive(e)})
+        if COUNTED_ID.fullmatch(str(e["id"])) and e["id"] not in out["counted"]["waiting"]:
+            out["counted"]["waiting"].append(e["id"])
+    return out
+
+
 def status(a):
     now = time.time()
+    if getattr(a, "json", False):
+        facts = status_facts(now)
+        if getattr(a, "resource", False):
+            facts["resource_status"] = resource_status()
+        print(json.dumps(facts, indent=1))
+        return 0
     for seat in seats():
         h = holder(seat)
         if h is None:
@@ -634,7 +972,7 @@ def status(a):
             continue
         age, mx = now - h.get("since", now), h.get("max", 1800) or 1800
         flag = "OVERDUE" if age > mx else "ok"
-        print(f"seat {seat}: {h['id']} since {hhmm(h.get('since', now))} ({int(age) // 60} of {mx // 60} min, {flag}"
+        print(f"seat {seat}: {h['id']} since {hhmm(h.get('since', now))} ({brief(age)} of {brief(mx)}, {flag}"
               f"{', exclusive' if is_exclusive(h) else ''}{', ALL SEATS' if h.get('all') else ''}): {h.get('job', '?')}")
     q = live(read_queue(), now)
     print(f"queue: {len(q)} waiting")
@@ -821,17 +1159,62 @@ def selftest():
                (rc1, rc2) == (0, 3) and read_queue() == [], (rc1, rc2))
         expect("the default --max is resource.default_max", default_max() == 1800)
 
-        expect("dur reads 30m, 2h, 90s, a bare 120 (seconds) and compound 4h30m, 1h15m30s",
-               [dur(x) for x in ("30m", "2h", "90s", "120", "4h30m", "1h15m30s", "1.5h")]
-               == [1800, 7200, 90, 120, 16200, 4530, 5400])
-        bad_dur = []
-        for x in ("", "h", "4x", "30mh", "m30"):
+        expect("dur reads 30m, 2h, 90s and compound 4h30m, 1h15m30s",
+               [dur(x) for x in ("30m", "2h", "90s", "4h30m", "1h15m30s", "1.5h")]
+               == [1800, 7200, 90, 16200, 4530, 5400])
+        bad_dur, said = [], []
+        for x in ("", "h", "4x", "30mh", "m30", "120", "90", "1.5", "0", "0s", "0m", "0h0m0s", "-5m"):
             try:
                 dur(x)
                 bad_dur.append(x)
-            except ValueError:
-                pass
-        expect("dur refuses empty, unit-only, unknown-unit and out-of-order durations", not bad_dur, bad_dur)
+            except ValueError as e:
+                said.append(str(e))
+        expect("dur refuses empty, unit-only, unknown-unit and out-of-order durations, and a bare number",
+               not bad_dur and all(UNIT_HINT in s for s in said) and "has no unit" in said[5], (bad_dur, said))
+        expect("dur refuses a zero time (0s, 0m) with its own words, and a negative one: neither becomes 30 minutes",
+               not bad_dur and len(said) == 13 and all("no time at all" in s for s in said[9:12]), (bad_dur, said[9:]))
+        expect("span writes seconds back with units", [span(x) for x in (5400, 90, 0, 7200)] == ["1h30m", "1m30s", "0s", "2h"])
+        RES["default_max"] = "45"
+        expect("a bare number in resource.default_max is not read: the 30-minute default stands", default_max() == 1800)
+        RES["default_max"] = "30m"
+        RES["max_grace"] = "0s"
+        zero = max_grace()
+        del RES["max_grace"]
+        expect("resource.max_grace defaults to 2m and may be 0s", (max_grace(), zero) == (120, 0), (max_grace(), zero))
+        RES["enforce_max"] = True
+        on = enforcing()
+        del RES["enforce_max"]
+        expect("resource.enforce_max or --enforce-max turns enforcing on; neither leaves it off",
+               on and enforcing(types.SimpleNamespace(enforce_max=True)) and not enforcing()
+               and not enforcing(types.SimpleNamespace(enforce_max=False)))
+
+        # status --json's facts: a counted sweep holds every seat, a counted run and a plain job wait
+        now = time.time()
+        for s in ("a", "b"):
+            lock_of(s).mkdir()
+            (lock_of(s) / "holder").write_text("MGR-9-sweep\n", encoding="utf-8")
+            (lock_of(s) / "hold.json").write_text(json.dumps(
+                {"id": "MGR-9-sweep", "job": "counted sweep: G1", "since": now - 7200, "max": 3600, "lane": s,
+                 "all": True, "prio": 0, "via": "run"}), encoding="utf-8")
+        write_queue([{"id": "EMP-7", "job": "unit tests", "prio": 5, "at": now - 50, "beat": now, "any": True, "max": 600},
+                     {"id": "MGR-9-counted-G2", "job": "counted G2", "prio": 0, "at": now - 10, "beat": now, "all": True},
+                     {"id": "EMP-5-dry-sweep", "job": "dry", "prio": 5, "at": now - 5, "beat": now, "lane": "b"}])
+        f = status_facts(now)
+        expect("status facts: each seat with its holder, since, max and overdue",
+               [(s["seat"], s["holder"], s["max"], s["overdue"], s["all"]) for s in f["seats"]]
+               == [("a", "MGR-9-sweep", 3600, True, True), ("b", "MGR-9-sweep", 3600, True, True)], f["seats"])
+        expect("status facts: the waiters in queue order with what each wants",
+               [(e["id"], e["wants"]) for e in f["queue"]]
+               == [("MGR-9-counted-G2", "all"), ("EMP-7", "any"), ("EMP-5-dry-sweep", "b")], f["queue"])
+        expect("status facts: the counted run holding and the one waiting, by id; a dry run's id is not counted",
+               f["counted"] == {"holding": ["MGR-9-sweep"], "waiting": ["MGR-9-counted-G2"]}, f["counted"])
+        for s in ("a", "b"):
+            shutil.rmtree(lock_of(s))
+        queue_file().unlink(missing_ok=True)
+        f = status_facts(now)
+        expect("status facts: a free seat has holder null, and nothing is counted",
+               f["seats"] == [{"seat": "a", "holder": None}, {"seat": "b", "holder": None}]
+               and f["queue"] == [] and f["counted"] == {"holding": [], "waiting": []}, f)
         expect("cmd_line keeps sh -c's script as one word", cmd_line(["sh", "-c", "a && b"]) == "sh -c 'a && b'",
                cmd_line(["sh", "-c", "a && b"]))
         expect("cmd_line passes a single shell-line argument as written", cmd_line(["a && b"]) == "a && b")
@@ -841,6 +1224,7 @@ def selftest():
         off2 = tmp / "office2"
         off2.mkdir()
         env = {k: v for k, v in os.environ.items() if not k.startswith("FOUNDRY_")}
+        (tmp / "none.toml").write_text("", encoding="utf-8")  # an empty profile file: every key comes from env
         env.update(FOUNDRY_PROFILE=str(tmp / "none.toml"), FOUNDRY_PATHS_OFFICE=str(off2), FOUNDRY_RESOURCE_NAME="bench",
                    FOUNDRY_RESOURCE_SEATS="a, b", RQ_T=off2.as_posix())
         if RES.get("shell"):
@@ -859,11 +1243,44 @@ def selftest():
         rc, out = cli("status", "--resource")
         expect("status --resource without resource.status says none is configured",
                rc == 0 and "no status command is configured" in out, (rc, out))
+        rc, out = cli("status", "--json")
+        try:
+            j = json.loads(out)
+        except ValueError:
+            j = {}
+        expect("status --json prints one JSON object: resource, seats, queue, counted",
+               rc == 0 and j.get("resource") == "bench" and [s["seat"] for s in j.get("seats", [])] == ["a", "b"]
+               and j.get("queue") == [] and j.get("counted") == {"holding": [], "waiting": []}
+               and j.get("enforce_max") is False, (rc, out))
+        for flag in ("--max", "--wait"):
+            rc, out = cli("take", "--id", "EMP-01", "--job", "by hand", flag, "120")
+            expect(f"{flag} with a bare number is refused (exit 2) and told to write a unit",
+                   rc == 2 and UNIT_HINT in out and not (off2 / "rq.lock").is_dir(), (rc, out))
+        rc, out = cli("run", "--id", "EMP-01", "--job", "x", "--max", "120", "--", "true")
+        expect("run --max with a bare number is refused too (exit 2)", rc == 2 and UNIT_HINT in out, (rc, out))
+        for flag in ("--max", "--wait"):
+            rc, out = cli("run", "--id", "EMP-01", "--job", "x", flag, "0s", "--", "true")
+            expect(f"{flag} 0s is refused (exit 2) with a clear line, not read as 30 minutes",
+                   rc == 2 and "no time at all" in out and not (off2 / "rq.lock").is_dir()
+                   and not (off2 / "rq.lock.b").is_dir(), (rc, out))
         rc, out = cli("take", "--id", "EMP-01", "--job", "by hand", "--wait", "1s")
         rc2, out2 = cli("take", "--id", "EMP-01", "--job", "again", "--wait", "1s")
         rc3, out3 = cli("run", "--id", "EMP-01", "--job", "again", "--wait", "1s", "--", "true")
         expect("take holds the first seat; a second take or run under the id is refused (exit 3) and told to release",
                rc == 0 and "holds seat a" in out and rc2 == 3 and rc3 == 3 and "release --id EMP-01" in out2, (rc, rc2, rc3, out2))
+        rc, out = cli("status")
+        expect("status prints a hold of a few seconds in seconds (N s of 30 min), not as 0 of 30 min",
+               rc == 0 and re.search(r"seat a: EMP-01 since \d\d:\d\d \(\d+ s of 30 min, ok", out), (rc, out))
+        expect("brief: seconds below one minute, whole minutes from there",
+               [brief(x) for x in (0, 7.9, 59, 60, 119, 1800)] == ["0 s", "7 s", "59 s", "1 min", "1 min", "30 min"])
+        # an interrupt that comes up out of a command (as it does after run's cleanup), in a process of its own
+        code = ("import sys\nsys.path.insert(0, " + repr(str(Path(__file__).resolve().parent)) + ")\nimport rq\n\n\n"
+                "def cut_short(_a):\n    raise KeyboardInterrupt\n\n\n"
+                "rq.dispatch = cut_short\nsys.argv = ['rq.py', 'status']\nsys.exit(rq.main())\n")
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, timeout=120)
+        expect("an interrupt that reaches main() ends in exit 130 with one line, not a traceback",
+               r.returncode == 130 and "Traceback" not in r.stdout + r.stderr and "rq: interrupted" in r.stdout,
+               (r.returncode, r.stdout, r.stderr))
         rc, out = cli("force-release", "--by", "EMP-02", "--note", "x")
         expect("force-release by an employee is refused (exit 3)", rc == 3 and (off2 / "rq.lock").is_dir(), (rc, out))
         rc, out = cli("release", "--id", "EMP-01", "--note", "by hand", "--touched", "src/app")
@@ -908,6 +1325,179 @@ def selftest():
                    (rc, got, out))
             rc, out = cli("status", "--resource", FOUNDRY_RESOURCE_STATUS="echo 12 GB free")
             expect("status --resource prints what resource.status says", rc == 0 and "bench: 12 GB free" in out, (rc, out))
+
+            # enforcing --max: off, a job past its limit runs on; on, it is ended with what it started
+            slow = 'sleep 4; printf done > "$RQ_T/slow.txt"'
+            rc, out = cli("run", "--id", "EMP-06", "--job", "slow", "--max", "1s", "--", slow)
+            expect("with enforcing off, a job past its --max runs to its own end",
+                   rc == 0 and (off2 / "slow.txt").exists() and "enforced" not in out, (rc, out))
+            (off2 / "slow.txt").unlink(missing_ok=True)
+            prof = tmp / "enforce.toml"
+            prof.write_text('[resource]\nname = "bench"\nseats = ["a", "b"]\nmax_grace = "1s"\n', encoding="utf-8")
+            t = time.time()
+            rc, out = cli("run", "--id", "EMP-06", "--job", "slow", "--max", "1s", "--enforce-max", "--",
+                          'sleep 30; printf done > "$RQ_T/slow.txt"', FOUNDRY_PROFILE=str(prof))
+            took = time.time() - t
+            last_b = (off2 / "rq.last.b").read_text(encoding="utf-8") if (off2 / "rq.last.b").exists() else ""
+            expect("run --enforce-max ends a job still going at --max plus resource.max_grace: exit 124, the seat "
+                   "released, rq.last says it was ended at its limit",
+                   rc == 124 and took < 20 and not (off2 / "rq.lock.b").is_dir()
+                   and "ended at its limit" in last_b and "--max 1s plus 1s grace" in last_b, (rc, took, last_b, out))
+            time.sleep(1.5)
+            expect("... and what the job started is ended with it (nothing ran after the sleep)",
+                   not (off2 / "slow.txt").exists())
+            prof.write_text('[resource]\nname = "bench"\nseats = ["a", "b"]\nmax_grace = "1s"\nenforce_max = true\n',
+                            encoding="utf-8")
+            rc, out = cli("run", "--id", "EMP-06", "--job", "quick", "--max", "20s", "--", "exit 3",
+                          FOUNDRY_PROFILE=str(prof))
+            expect("with resource.enforce_max on, a job inside its limit exits with its own code",
+                   rc == 3 and "--max is enforced" in out and "quick (exit 3)" in
+                   (off2 / "rq.last.b").read_text(encoding="utf-8"), (rc, out))
+            rc, out = cli("run", "--id", "EMP-06", "--job", "slow", "--max", "1s", "--", "sleep 30",
+                          FOUNDRY_PROFILE=str(prof))
+            expect("with resource.enforce_max on, a job past its limit is ended without the flag (exit 124)",
+                   rc == 124 and not (off2 / "rq.lock.b").is_dir(), (rc, out))
+            rc, out = cli("status", "--json", FOUNDRY_PROFILE=str(prof))
+            expect("status --json says enforcing is on", rc == 0 and json.loads(out).get("enforce_max") is True, (rc, out))
+
+            # the lines a caller reads to tell whether the job's command ran: started, finished, the caller's token
+            rc, out = cli("run", "--id", "EMP-06", "--job", "marks", "--",
+                          'printf "[%s]" "$FOUNDRY_RQ_TOKEN" > "$RQ_T/tok.txt"; echo "rq: started [t0k]"; exit 7',
+                          FOUNDRY_RQ_TOKEN="t0k")
+            lines = out.splitlines()
+            expect("run prints `rq: started [token]` once the shell is started, after the `running in seat` line, and "
+                   "`rq: finished exit N [token]` when the command ended by itself",
+                   rc == 7 and lines.count(started_line("t0k")) == 2 and finished_line(7, "t0k") in lines
+                   and [l.startswith(RUNNING) for l in lines].index(True) < lines.index(started_line("t0k")), (rc, out))
+            tok = (off2 / "tok.txt").read_text(encoding="utf-8") if (off2 / "tok.txt").exists() else None
+            expect("... and the job is not given the token (FOUNDRY_RQ_TOKEN is taken out of its environment)",
+                   tok == "[]", tok)
+            rc, out = cli("run", "--id", "EMP-06", "--job", "no shell", "--", "true", FOUNDRY_RQ_TOKEN="t0k",
+                          FOUNDRY_RESOURCE_SHELL="no-such-shell-here")
+            expect("a shell that cannot be started: exit 127, the `running in seat` line but no `started` line",
+                   rc == 127 and RUNNING in out and STARTED not in out and FINISHED not in out
+                   and not (off2 / "rq.lock.b").is_dir(), (rc, out))
+            rc, out = cli("run", "--id", "EMP-06", "--job", "slow", "--max", "1s", "--enforce-max", "--", "sleep 30",
+                          FOUNDRY_PROFILE=str(prof), FOUNDRY_RQ_TOKEN="t0k")
+            expect("a job ended at its limit has a `started` line and no `finished` line (exit 124)",
+                   rc == 124 and started_line("t0k") in out and FINISHED not in out, (rc, out))
+            rc, out = cli("run", "--id", "EMP-06", "--job", "quick", "--max", "45s", "--", "true")
+            expect("a hold shorter than a minute is printed in seconds, not as 0 min",
+                   rc == 0 and "for up to 45 s (waited 0 s)" in out and "0 min" not in out, (rc, out))
+
+            # stopping a `run`: a stop signal sent to rq.py itself ends the job and releases the seat
+            import signal
+            prof.write_text('[resource]\nname = "bench"\nseats = ["a", "b"]\nmax_grace = "1s"\n', encoding="utf-8")
+            new_group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {}
+
+            def started(log, *args):
+                with open(log, "wb") as lf:
+                    return subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *args], stdout=lf,
+                                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                            env=dict(env, FOUNDRY_PROFILE=str(prof)), **new_group)
+
+            def until(cond, limit):
+                end = time.time() + limit
+                while time.time() < end and not cond():
+                    time.sleep(0.1)
+                return cond()
+
+            def text_of(path):
+                try:
+                    return path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    return ""
+
+            sigs = [signal.CTRL_BREAK_EVENT] if os.name == "nt" else [signal.SIGTERM, signal.SIGHUP, signal.SIGINT]
+            if os.name == "nt":
+                skipped.append("POSIX only: an INT (Ctrl+C) sent to `run` ends in exit 130 with no traceback (main's "
+                               "own catch is tested above)")
+            for n, sig in enumerate(sigs):
+                name = "BREAK" if os.name == "nt" else signal.Signals(sig).name
+                want = 128 + (signal.SIGBREAK if os.name == "nt" else sig)
+                if os.name != "nt" and sig == signal.SIGINT:
+                    want = 130  # the documented exit of an interrupt, with no traceback
+                log, pidf, late = tmp / f"stop{n}.log", off2 / "job.pid", off2 / "late.txt"
+                for f in (pidf, late):
+                    f.unlink(missing_ok=True)
+                t = time.time()
+                # the first with --max enforced, the next without: a stop ends the job's whole group either way
+                proc = started(log, "run", "--id", "EMP-07", "--job", "long", "--max", "5m",
+                               *(["--enforce-max"] if n == 0 else []), "--",
+                               'echo $$ > "$RQ_T/job.pid"; (sleep 6; printf done > "$RQ_T/late.txt") & wait')
+                up = until(pidf.exists, 30)
+                try:
+                    proc.send_signal(sig)
+                    sent = True
+                except OSError:
+                    sent = False
+                try:
+                    rc = proc.wait(timeout=40)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    rc = "still running 40 s after the signal"
+                last_b = text_of(off2 / "rq.last.b")
+                if os.name == "nt" and (not sent or rc == 0):
+                    skipped.append("a BREAK sent to `run`: this host delivered none (no console is attached)")
+                    if (off2 / "rq.lock.b").is_dir():
+                        cli("force-release", "--by", "MGR-01", "--note", "selftest", "--seat", "b")
+                    continue
+                expect(f"a {name} sent to rq.py while its job runs releases the seat with a note saying so "
+                       f"(exit {want})",
+                       up and rc == want and not (off2 / "rq.lock.b").is_dir() and "stopped by " in last_b
+                       and "stopped by " in text_of(log) and "Traceback" not in text_of(log)
+                       and started_line("") in text_of(log) and FINISHED not in text_of(log),
+                       (up, rc, last_b, text_of(log)))
+                time.sleep(max(0.0, t + 8 - time.time()))
+                expect(f"... and the job is ended with it: nothing of it runs on after the {name}", not late.exists())
+                if os.name != "nt":
+                    try:
+                        os.kill(int(text_of(pidf).strip() or 0) or -1, 0)
+                        alive = True
+                    except (OSError, ValueError):
+                        alive = False
+                    expect(f"... and the job's shell is gone after the {name}", not alive)
+            # a stop while `run` still waits for a seat: it leaves the queue and holds nothing
+            for seat in ("a", "b"):
+                cli("take", "--id", f"EMP-1{seat.upper()}", "--job", "by hand", "--seat", seat, "--wait", "5s")
+            log = tmp / "stopw.log"
+            proc = started(log, "run", "--id", "EMP-08", "--job", "waits", "--wait", "15s", "--", "true")
+            up = until(lambda: any(e.get("id") == "EMP-08" for e in (json.loads(text_of(off2 / "rq.queue.json") or "[]"))), 30)
+            try:
+                proc.send_signal(sigs[0])
+            except OSError:
+                pass
+            try:
+                rc = proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                rc = "still running 60 s after the signal"
+            q_left = [e.get("id") for e in json.loads(text_of(off2 / "rq.queue.json") or "[]")]
+            if os.name == "nt" and rc == 6:
+                skipped.append("a BREAK sent to a waiting `run`: this host delivered none (no console is attached)")
+            else:
+                expect("a stop signal sent to a `run` that still waits takes it out of the queue; the seats' holders stay",
+                       up and rc == 128 + (signal.SIGBREAK if os.name == "nt" else sigs[0]) and "EMP-08" not in q_left
+                       and (off2 / "rq.lock").is_dir() and (off2 / "rq.lock.b").is_dir(), (up, rc, q_left, text_of(log)))
+            for seat in ("a", "b"):
+                cli("release", "--id", f"EMP-1{seat.upper()}", "--note", "selftest")
+
+            # --enforce-max outside Windows: the group is KILLed after the grace even when the shell has ended
+            if os.name == "nt":
+                skipped.append("POSIX only: at an enforced --max a child that ignores TERM is KILLed with its group "
+                               "(Windows ends the job object whole, tested above)")
+            else:
+                late = off2 / "ign.txt"
+                late.unlink(missing_ok=True)
+                t = time.time()
+                rc, out = cli("run", "--id", "EMP-09", "--job", "ignores TERM", "--max", "1s", "--enforce-max", "--",
+                              '(trap "" TERM; sleep 14; printf done > "$RQ_T/ign.txt") & wait', FOUNDRY_PROFILE=str(prof))
+                took = time.time() - t
+                expect("at an enforced --max the shell ends at TERM and the seat is released (exit 124)",
+                       rc == 124 and took < 14 and not (off2 / "rq.lock.b").is_dir(), (rc, took, out))
+                time.sleep(max(0.0, t + 16 - time.time()))
+                expect("... and its child that ignores TERM was KILLed with the group: it wrote nothing afterwards",
+                       not late.exists())
     finally:
         RES, HOLD_TOKEN = keep_res, keep_token
         for k, v in keep_env.items():
@@ -941,14 +1531,15 @@ def main():
         t.add_argument("--id", required=True)
         t.add_argument("--job", required=True)
         t.add_argument("--prio", type=int, default=5)
-        t.add_argument("--max", type=dur, default=default_max())
-        t.add_argument("--wait", type=dur, default=4 * 3600)
+        t.add_argument("--max", type=dur_arg, default=default_max())
+        t.add_argument("--wait", type=dur_arg, default=4 * 3600)
         t.add_argument("--seat", default=None)
         t.add_argument("--exclusive", action="store_true")
         if name == "run":
             t.add_argument("--all-seats", action="store_true")
             t.add_argument("--touched", default="")
             t.add_argument("--no-prepare", action="store_true")
+            t.add_argument("--enforce-max", action="store_true")
             t.add_argument("cmd", nargs=argparse.REMAINDER)
     r = sub.add_parser("release")
     r.add_argument("--id", required=True)
@@ -960,12 +1551,24 @@ def main():
     f.add_argument("--seat", default=None)
     s = sub.add_parser("status")
     s.add_argument("--resource", action="store_true")
-    lv = sub.add_parser("leave")
+    s.add_argument("--json", action="store_true")
+    lv =sub.add_parser("leave")
     lv.add_argument("--id", required=True)
     lv.add_argument("--note", default="")
     a = p.parse_args()
     if a.cmd_name == "run" and a.cmd and a.cmd[0] == "--":
         a.cmd = a.cmd[1:]
+    try:
+        return dispatch(a)
+    except KeyboardInterrupt:
+        # the cleanup has run by now (run's `finally` ended the job and released the seat): the documented exit,
+        # not a traceback
+        quiet_signals()
+        print("rq: interrupted", flush=True)
+        return 130
+
+
+def dispatch(a):
     if a.cmd_name == "take":
         return take(a)[0]
     return {"run": run, "release": release, "force-release": force_release, "status": status, "leave": leave}[a.cmd_name](a)

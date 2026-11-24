@@ -7,8 +7,11 @@ Nothing in the checkout or its crew office is read or written: the project is a 
 FOUNDRY_MAIN), its state is made by `board.py init`, the state and the map are scratch files (FOUNDRY_PATHS_STATE,
 FOUNDRY_PATHS_MAP), the office is a scratch folder (FOUNDRY_PATHS_OFFICE), the shared resource is a made-up one
 (FOUNDRY_RESOURCE_NAME, FOUNDRY_RESOURCE_SEATS), and FOUNDRY_SWEEP_GUARD says whether the run counts as the main
-checkout (1) or as a worktree (0).
+checkout (1) or as a worktree (0). Git never looks above the scratch folder (GIT_CEILING_DIRECTORIES), so the test
+reads the same with the temp folder inside a repository.
 """
+import contextlib
+import io
 import json
 import os
 import shutil
@@ -23,15 +26,38 @@ TOOLS = ROOT / "tools"
 BOARD = TOOLS / "board.py"
 
 
+def remove_tree(path):
+    """Removes a scratch folder even when something in it is read-only (git's objects are): the handler makes the
+    entry and its folder writable and tries once more."""
+    def retry(fn, p, _exc):
+        try:
+            os.chmod(os.path.dirname(p), 0o700)
+            os.chmod(p, 0o700)
+            fn(p)
+        except OSError:
+            pass
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
+class Cut(BaseException):
+    """The kill the replay test sends between the state's write and the pending file's."""
+
+
 def main():
-    tmp = Path(tempfile.mkdtemp(prefix="board-guard-"))
+    # resolved at once: macOS's /var is a link and Windows may hand out an 8.3 name, and the tools resolve theirs
+    tmp = Path(tempfile.mkdtemp(prefix="board-guard-")).resolve()
     proj = tmp / "project"
     office = tmp / "office"
     proj.mkdir()
     office.mkdir()
     state, out = tmp / "state.json", tmp / "map.html"
     base = {k: v for k, v in os.environ.items() if not k.startswith("FOUNDRY_")}
-    base.update({"FOUNDRY_ROOT": str(proj), "FOUNDRY_MAIN": str(proj), "FOUNDRY_PROFILE": str(tmp / "no-profile.toml"),
+    # git stops looking for a repository at the scratch folder: one above the temp folder is never read
+    base["GIT_CEILING_DIRECTORIES"] = str(tmp)
+    base.update({"FOUNDRY_ROOT": str(proj), "FOUNDRY_MAIN": str(proj),
                  "FOUNDRY_PATHS_OFFICE": str(office), "FOUNDRY_PATHS_STATE": str(state), "FOUNDRY_PATHS_MAP": str(out),
                  "FOUNDRY_RESOURCE_NAME": "test rig", "FOUNDRY_RESOURCE_SEATS": "main"})
     ok, bad = [], []
@@ -186,6 +212,97 @@ def main():
     expect("with no sweep a decision is answered at once, and decide list shows the words",
            rc == 0 and rc2 == 0 and "D1 answered" in o2 and "-> Yes, go on." in o2, o + o2)
 
+    # the office's freeze marker (office.py freeze on) guards like a sweep, with a shared resource or without one
+    def freeze(at, max_s=3600):
+        (office / "freeze.json").write_text(json.dumps({"by": "MGR-9", "why": "counted G1 by hand", "lane": "G1",
+                                                        "at": at, "max_s": max_s}), encoding="utf-8")
+
+    freeze(time.time() - 30)
+    frozen_state, frozen_map = state.read_bytes(), out.read_bytes()
+    rc, o = run("checklist", "add", "held under a freeze")
+    expect("a freeze holds an edit (exit 0) and says who froze and why",
+           rc == 0 and "held, not written" in o and "MGR-9 froze the main checkout" in o and "counted G1 by hand" in o, o)
+    rc, o = run("log", "add", "--by", "MGR-9", "--title", "held log entry", resource=False)
+    expect("... in a project with no shared resource too", rc == 0 and "held, not written" in o, o)
+    rc, o = run("milestone", "set", "M1", "--status", "finished")
+    expect("a bad edit during a freeze is refused, not held", rc == 2 and "held, not written" not in o, o)
+    rc, o = run("build")
+    expect("build during a freeze does not rewrite the map", rc == 0 and "NOT rebuilt" in o and out.read_bytes() == frozen_map, o)
+    rc, o = run("check", resource=False)
+    expect("check during a freeze does not rewrite the map, and Needs attention says who froze and why",
+           "NOT rebuilt" in o and "[freeze] MGR-9 froze the main checkout" in o and out.read_bytes() == frozen_map, o[-500:])
+    for c in ("promote", "init"):
+        rc, o = run(c)
+        expect(f"{c} during a freeze is refused with exit 3", rc == 3 and "refused" in o and "frozen" in o, o)
+    rc, o = run("brief")
+    j = json.loads(o[o.index("{"):])
+    expect("brief has `freeze` with the facts, beside an empty counted_sweep",
+           j.get("freeze", {}).get("by") == "MGR-9" and j["freeze"]["why"] == "counted G1 by hand" and j["counted_sweep"] == []
+           and j["freeze"]["stale"] is False, j.get("freeze"))
+    queue({"id": "MGR-9-sweep", "job": "counted sweep", "prio": 0, "at": now, "beat": time.time(), "all": True})
+    rc, o = run("note", "--by", "MGR-9", "held under both")
+    expect("a sweep and a freeze together: the edit is held and both are named",
+           rc == 0 and "held, not written" in o and "MGR-9-sweep" in o and "froze the main checkout" in o, o)
+    queue()
+    freeze(time.time() - 7200, max_s=60)
+    rc, o = run("note", "--by", "MGR-9", "held under a stale freeze")
+    expect("a freeze past its limit still holds, with exit 4, DEAD? and office.py freeze off",
+           rc == 4 and "held, not written" in o and "DEAD?" in o and "freeze off" in o and "force-release" not in o, o)
+    expect("the state and the map are untouched during the freeze", state.read_bytes() == frozen_state and out.read_bytes() == frozen_map)
+    (office / "freeze.json").unlink()
+    rc, o = run("build")
+    st = json.loads(state.read_text(encoding="utf-8"))
+    expect("after the freeze the held edits are applied, in order",
+           rc == 0 and "applied 4 of 4" in o and st.get("checklist") == ["held under a freeze"]
+           and st["log"][0]["title"] == "held log entry" and notes()[:2] == ["held under a stale freeze", "held under both"], o)
+    rc, o = run("brief")
+    expect("with the freeze lifted, brief has no `freeze` key", "freeze" not in json.loads(o[o.index("{"):]), o[:200])
+
+    # a replay cut short after the state was written and before the pending file was: the next run finds the
+    # edit's id in the state (`_applied`) and does not apply it again
+    pending = office / "pending-state.jsonl"
+    failed_only = pending.read_bytes()  # the line that failed earlier stays in the file throughout
+    freeze(time.time() - 30)
+    run("note", "--by", "MGR-9", "held once")
+    kept = pending.read_bytes()
+    (office / "freeze.json").unlink()
+    rc, o = run("build")
+    held_id = json.loads(kept.decode("utf-8").splitlines()[-1]).get("id")
+    expect("a held edit has an id, and the state names the last one it took",
+           rc == 0 and "applied 1 of 1" in o and bool(held_id) and pending.read_bytes() == failed_only
+           and json.loads(state.read_text(encoding="utf-8")).get("_applied") == held_id, o)
+    pending.write_bytes(kept)  # the file as a run killed between the two writes would have left it
+    rc, o = run("build")
+    expect("a held edit the state already has is dropped from the file, not applied twice",
+           rc == 0 and notes().count("held once") == 1 and "not applied twice" in o and "applied 1 of" not in o
+           and pending.read_bytes() == failed_only, o)
+    rc, o = run("check")
+    expect("the check has no warning about the state's `_applied` key", "_applied" not in o, o[-400:])
+
+    # a line of the pending file that is not a held edit (a list, a string, not JSON, an object with no argv) is
+    # kept as it is, reported and skipped: it never stops a writing command or the `pending` list
+    odd_lines = b'[1, 2]\n"x"\nnot json at all\n{"at": "2030-01-11T05:00:00-06:00"}\n'
+    freeze(time.time() - 30)
+    run("note", "--by", "MGR-9", "held before the odd lines")
+    pending.write_bytes(odd_lines + pending.read_bytes())
+    rc, o = run("pending")
+    expect("pending lists the unreadable lines as such and does not crash",
+           rc == 0 and "Traceback" not in o and o.count("UNREADABLE line") == 4, o)
+    rc, o = run("note", "--by", "MGR-9", "held beside the odd lines")
+    expect("an edit is still held with unreadable lines in the file", rc == 0 and "held, not written" in o and "Traceback" not in o, o)
+    rc, o = run("brief")
+    expect("the brief still prints", "Traceback" not in o and "held_edits" in o, o[-300:])
+    (office / "freeze.json").unlink()
+    rc, o = run("build")
+    expect("a build with unreadable lines applies the held edits beside them and says how many lines it skipped",
+           rc == 0 and "Traceback" not in o and "applied 2 of 2" in o and "4 line(s)" in o and "cannot be read as a held edit" in o
+           and notes()[:2] == ["held beside the odd lines", "held before the odd lines"], o)
+    expect("... and keeps those lines byte for byte", pending.read_bytes() == odd_lines + failed_only, pending.read_bytes())
+    rc, o = run("note", "--by", "MGR-9", "written with odd lines in the file")
+    expect("... and the next edit is written at once", rc == 0 and notes()[0] == "written with odd lines in the file"
+           and pending.read_bytes() == odd_lines + failed_only, o)
+    pending.write_bytes(failed_only)
+
     # the page the scratch project gets: its own name, the resource by its name, no word of another project
     page = out.read_text(encoding="utf-8")
     expect("the map is headed by the project's name and has the resource card and the Decisions section",
@@ -213,11 +330,42 @@ def main():
     queue()
 
     # in-process rows: board.py's functions on hand-made input (nothing written outside tmp)
-    saved = {k: os.environ.get(k) for k in base if k.startswith("FOUNDRY_")}
-    os.environ.update({k: v for k, v in base.items() if k.startswith("FOUNDRY_")})
+    mine_env = [k for k in base if k.startswith("FOUNDRY_") or k == "GIT_CEILING_DIRECTORIES"] + ["FOUNDRY_SWEEP_GUARD"]
+    saved = {k: os.environ.get(k) for k in mine_env + ["FOUNDRY_PROFILE"]}
+    os.environ.update({k: base[k] for k in mine_env if k in base})
+    os.environ.pop("FOUNDRY_PROFILE", None)  # the defaults: the scratch project has no profile file
+    os.environ["FOUNDRY_SWEEP_GUARD"] = "1"  # the held edits below are the main checkout's
     sys.path.insert(0, str(TOOLS))
     import datetime as dt
     import board
+
+    # the same cut, made where it happens: three held notes, the run killed after the first one's state write
+    sink = io.StringIO()
+    t0 = dt.datetime.now().astimezone()
+    with contextlib.redirect_stdout(sink):
+        held_rc = [board.hold_edit(["note", "--by", "MGR-9", f"cut {i}"], t0) for i in (1, 2, 3)]
+    write_pending = board.write_pending
+
+    def cut(_held):
+        raise Cut()
+    board.write_pending = cut
+    try:
+        with contextlib.redirect_stdout(sink):
+            board.apply_pending()
+        killed = False
+    except Cut:
+        killed = True
+    finally:
+        board.write_pending = write_pending
+    mid, mid_lines = notes(), len(pending.read_text(encoding="utf-8").splitlines())
+    expect("a replay killed after the first edit's state write leaves that edit in the state and all three still in the file",
+           held_rc == [0, 0, 0] and killed and mid[0] == "cut 1" and "cut 2" not in mid and mid_lines == 4, (held_rc, killed, mid[:3]))
+    with contextlib.redirect_stdout(sink):
+        done = board.apply_pending()
+    after = notes()
+    expect("the next replay applies the other two and nothing twice",
+           done == 2 and after[:3] == ["cut 3", "cut 2", "cut 1"] and all(after.count(f"cut {i}") == 1 for i in (1, 2, 3))
+           and pending.read_bytes() == failed_only, (done, after[:5], sink.getvalue()[-400:]))
 
     # write_state refuses a note or log item of the wrong shape, and writes nothing
     bad_path = tmp / "bad-state.json"
@@ -276,7 +424,7 @@ def main():
         print(f"  FAIL {x}")
     print(f"board guard test: {len(ok)} ok, {len(bad)} failed" + (f" (scratch kept: {tmp.as_posix()})" if bad else ""))
     if not bad:
-        shutil.rmtree(tmp, ignore_errors=True)
+        remove_tree(tmp)
     return 1 if bad else 0
 
 

@@ -6,13 +6,16 @@ join, the signed edit log, and that flow.py's model reads its links from the ass
 
 Everything runs in a scratch folder with a scratch crew office (FOUNDRY_PATHS_OFFICE) and a scratch profile
 (FOUNDRY_PROFILE, which names one late stage, Beta), so the real office, roster and graph are never touched and
-no git config is written.
+no git config is written. FOUNDRY_ROOT and FOUNDRY_MAIN name the scratch project, so nothing walks up into a
+repository the temp folder may lie in; the git identity comes from the environment.
 """
 import json
 import os
 import subprocess
 import sys
+import shutil
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent / "tools"
@@ -58,7 +61,7 @@ def check(name, cond, detail=""):
 
 
 def main():
-    tmp = Path(tempfile.mkdtemp(prefix="flowgraph-"))
+    tmp = Path(tempfile.mkdtemp(prefix="flowgraph-")).resolve()  # its real name (macOS /var, a Windows 8.3 name)
     root, off = tmp / "root", tmp / "office"
     (root / "docs" / "progress").mkdir(parents=True)
     off.mkdir()
@@ -69,6 +72,7 @@ def main():
     (tmp / "foundry.toml").write_text('project = "Fixture"\n[roadmap]\nlate_stages = ["Beta"]\n', encoding="utf-8")
     os.environ["FOUNDRY_PROFILE"] = str(tmp / "foundry.toml")
     os.environ["FOUNDRY_PATHS_OFFICE"] = str(off)
+    os.environ["FOUNDRY_ROOT"] = os.environ["FOUNDRY_MAIN"] = str(root)
     sys.path.insert(0, str(HERE))
     import office
     key = office.load_key(off)
@@ -83,9 +87,9 @@ def main():
     office.write_roster(off, roster)
     asset, log = root / "docs" / "flow" / "road.graph.json", root / "docs" / "flow" / "road.edits.jsonl"
 
-    def run(*args, by=None):
-        cmd = [sys.executable, str(FLOW), f"--root={root}", *args] + (["--by", by] if by else [])
-        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(os.environ))
+    def run(*args, by=None, at=None, **more_env):
+        cmd = [sys.executable, str(FLOW), f"--root={at or root}", *args] + (["--by", by] if by else [])
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", env={**os.environ, **more_env})
         return r.returncode, r.stdout + r.stderr
 
     def edges():
@@ -184,6 +188,54 @@ def main():
     rc, out = run(*G, "verify")
     check("the founder's edits are signed like the manager's", rc == 0 and "graph ok" in out and "by FDR-1" in out, out)
 
+    # a freeze of the main checkout holds every edit, the manager's too; reading goes on
+    now = time.time()
+    (off / "freeze.json").write_text(json.dumps({"by": "MGR-1", "why": "counted run of G1", "at": now}), encoding="utf-8")
+    before = asset.read_bytes(), log.read_bytes()
+    for name, args in (("link", ("link", "M2", "M3", "--why", "x")), ("unlink", ("unlink", "M1", "M2")), ("confirm", ("confirm", "M2", "M3")),
+                       ("node add", ("node", "add", "M8")), ("node set", ("node", "set", "M1", "--note", "n")), ("node rm", ("node", "rm", "M3")),
+                       ("undo", ("undo",)), ("seed", ("seed",))):
+        rc, out = run(*G, *args, by=mgr["line"])
+        check(f"graph {name} during the manager's freeze is refused: exit 3, who froze, why, and how to see it",
+              rc == 3 and "MGR-1" in out and "counted run of G1" in out and "freeze show" in out
+              and len(out.strip().splitlines()) == 1 and (asset.read_bytes(), log.read_bytes()) == before, out)
+    rc, out = run(*G, "node", "add", "M8", by=fdr["line"])
+    check("the founder's badge is held by the freeze too", rc == 3 and "freeze" in out, out)
+    rc, out = run(*G, "node", "add", "M8", by=emp["line"])
+    check("a crew badge is refused for its badge first, freeze or not", rc == 3 and "may read the graph but not edit" in out, out)
+    for args in (("show",), ("show", "M3"), ("trace", "M3"), ("verify",)):
+        rc, out = run(*G, *args)
+        check(f"graph {' '.join(args)} is never refused by a freeze", rc == 0 and "freeze" not in out, out)
+    (off / "freeze.json").write_text("{not json", encoding="utf-8")
+    rc, out = run(*G, "node", "add", "M8", by=mgr["line"])
+    check("a freeze file that cannot be read is a freeze", rc == 3 and "freeze" in out and (asset.read_bytes(), log.read_bytes()) == before, out)
+    (off / "freeze.json").unlink()
+    rig = {"FOUNDRY_RESOURCE_NAME": "the test rig"}
+    for qid in ("MGR-1-sweep", "MGR-1-counted-G1"):
+        (off / "rq.queue.json").write_text(json.dumps([{"id": qid, "job": "counted", "prio": 0, "all": True, "at": now, "beat": now}]), encoding="utf-8")
+        rc, out = run(*G, "node", "add", "M8", by=mgr["line"], **rig)
+        check(f"an edit while {qid} is in the queue is refused, and names it",
+              rc == 3 and qid in out and "rq.py" in out and (asset.read_bytes(), log.read_bytes()) == before, out)
+    (off / "rq.queue.json").write_text("{not json", encoding="utf-8")
+    rc, out = run(*G, "node", "add", "M8", by=mgr["line"], **rig)
+    check("a queue that cannot be read cannot rule a freeze out: the edit is refused", rc == 3 and "could not be read" in out, out)
+    (off / "rq.queue.json").write_text(json.dumps([{"id": "EMP-4", "job": "unit tests", "prio": 5, "at": now, "beat": now}]), encoding="utf-8")
+    rc, out = run(*G, "node", "add", "M8", by=mgr["line"], **rig)
+    check("a plain job in the queue is no freeze: the edit goes on", rc == 0 and "M8" in json.loads(asset.read_text(encoding="utf-8"))["nodes"], out)
+    (off / "rq.queue.json").unlink()
+    rc, out = run(*G, "node", "rm", "M8", by=mgr["line"])
+    check("with the freeze lifted and the queue clear the manager edits again", rc == 0, out)
+    # a checkout that is not the main one (a worktree) is not frozen: the freeze holds the main checkout only
+    (off / "freeze.json").write_text(json.dumps({"by": "MGR-1", "why": "counted run of G1", "at": now}), encoding="utf-8")
+    side = tmp / "side"
+    shutil.copytree(root, side)
+    rc, out = run(*G, "node", "add", "M8", by=mgr["line"])
+    check("the main checkout is held", rc == 3, out)
+    rc, out = run(*G, "node", "add", "M8", by=mgr["line"], at=side, FOUNDRY_ROOT=str(side))
+    check("a checkout that is not the main one is not frozen", rc == 0 and "M8" in json.loads(
+        (side / "docs" / "flow" / "road.graph.json").read_text(encoding="utf-8"))["nodes"], out)
+    (off / "freeze.json").unlink()
+
     # reading is open: no badge
     rc, out = run(*G, "show", "M3")
     check("show a node", rc == 0 and "in pins: after, gate, push" in out and "M1.done → M3.after" in out and "UNCONFIRMED" in out, out)
@@ -256,8 +308,9 @@ def main():
     # hand-in: a crew branch that changes the graph is sent back; the manager's is not (identity by env, no git config)
     repo = tmp / "repo"
     repo.mkdir()
-    genv = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
-            "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+    genv = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid", "GIT_COMMITTER_NAME": "t",
+            "GIT_COMMITTER_EMAIL": "t@example.invalid", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
     def git(*args):
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, env=genv)
@@ -285,8 +338,8 @@ def main():
         os.chmod(path, 0o700)
         func(path)
 
-    import shutil
-    shutil.rmtree(tmp, onerror=_writable)
+    # onexc from Python 3.12 (onerror is deprecated there); onerror before it
+    shutil.rmtree(tmp, **({"onexc": _writable} if sys.version_info >= (3, 12) else {"onerror": _writable}))
     print("flow graph tests: all ok")
     return 0
 

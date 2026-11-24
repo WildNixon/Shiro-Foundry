@@ -13,7 +13,7 @@ A slot runs the current work shift. A work shift that does not finish in one slo
 
 - Hours that cross a slot boundary (07:00 to 16:00): the user's hours win. You write the hand-off entry, run the next slot's start and its research-and-review window in this session, and `rota.days` names you for both slots.
 - The user also names a different manager for the next slot ("a swing manager at 16:00"): hand off at the user's end instead, to that manager. Let the next slot's own start timer pass.
-- Either way, write the end as `"ends": "HH:MM"` in your slot's `rota.days` entry, with the user's own words in its `note`, so `board.py check` reads you as on the clock until then. Tell the journal too: `journal.py due --by "<your line>" --end HH:MM`.
+- Either way, write the end into your slot's rota entry with the user's own words: `board.py rota set --date <YYYY-MM-DD> --slot <slot> --ends HH:MM --note "<the user's own words>"`, so `board.py check` reads you as on the clock until then (an empty `--ends ""` takes a mistyped end out). Tell the journal too: `journal.py due --by "<your line>" --end HH:MM`.
 - The timers do not know it. Make a one-shot hand-off timer for the user's end, and let the slot's own hand-off timer pass with a note: the recurring slot timers fire at the rota's times, not the user's.
 
 ## The journal's commands
@@ -52,19 +52,20 @@ A fix to a skill or a tool of the foundry itself is the founder's and the user's
 0. An hour before the end: the journal's plan (above). The hand-off entry names the plan file, the approved J ids and what still waits.
 1. Finish or pause the running block. A paused block's status is `partial`, with a `note` saying exactly where it stopped. Write its log entry.
 2. `office.py end-shift --by "<your line>" --out <scratchpad>/crew.json`. A temp that never came in or went silent is clocked out as `lost`; one still working carries over. Sessions still on the clock carry over: they keep working under the next manager. Tell them by message that the manager changes.
-3. Write the hand-off log entry:
-   - `slot`, and `crew` (from `end-shift`).
-   - `not_done`: every open thread.
-   - `next`: the first thing the next manager does.
-   - Each open question cites its D-number or F-number. Before you copy one forward, read that entry: a question whose D-entry is answered or whose F-entry is fixed is closed, not open. A question with no number gets one first (`board.py decide ask` for the user's, `board.py fail` for a defect).
-   - The slot's commits, for the next slot's reviewer; the open questions for its researcher.
-   - Your proposals for the founder (the roadmap, the queue, the profile), by file path (`<paths.handoff>/<date>-proposal-<topic>.md`; the founder's audit reads them).
+3. `office.py handoff --by "<your line>"` writes the next manager's brief and prints its path (`<office>/briefs/handoff-<slot>-<YYYYMMDD>.md`; `--out FILE` for another place; it never overwrites). The office and the state fill what they know: Now, the shift's blocks, who is on the clock, open failures and decisions, a freeze or counted run, the journal, usage. You fill the rest by hand:
+   - The benches line: each bench's number, session id, worktree and state.
+   - The user's words this slot, quoted, each with its time.
+   - What you promised the crew, by badge id.
    - Every background job this session started, and that the session stays open until it ends.
-   - The bench pool: each bench's number, session id, worktree and state.
-   - A note for anything that is not a block result.
-4. Write the next slot's `rota.days` entry: the shift it runs, its manager (`null` until appointed), and a note on the carry-over crew.
-5. `flow.py build`, `flow.py selftest`, `plan_flow.py selftest`. Then `board.py check`, commit the state file and the map, and `office.py clock-out --badge "<your line>" --result handed-off`.
-6. If the next manager is not running yet: "The next manager", below. Then delete your slot timers. Do no further work in the session, except to pass on a background job's result.
+4. Write the hand-off log entry: `board.py log add --by <your badge id> --title "Hand-off: <slot>" --done "a | b" --not-done "a | b" --verdicts "G1 PASS" --commits a,b --next "..." --crew-file <scratchpad>/crew.json` (the date, the time and the slot come from the clock).
+   - `--not-done`: every open thread. `--next`: the first thing the next manager does, and the brief's path.
+   - Each open question cites its D-number or F-number. Before you copy one forward, read that entry: a question whose D-entry is answered or whose F-entry is fixed is closed, not open. A question with no number gets one first (`board.py decide ask` for the user's, `board.py fail` for a defect).
+   - `--commits`: the slot's commits, for the next slot's reviewer; name the open questions for its researcher.
+   - Your proposals for the founder (the roadmap, the queue, the profile), by file path (`<paths.handoff>/<date>-proposal-<topic>.md`; the founder's audit lists them).
+   - A note (`board.py note`) for anything that is not a block result.
+5. Write the next slot's rota entry: `board.py rota set --date <YYYY-MM-DD> --slot <slot> --shift <shift id> --note "<the carry-over crew>"`. Leave `--manager` out until one is appointed.
+6. `flow.py build`, `flow.py selftest`, `plan_flow.py selftest`. Then `board.py check`, commit the state file and the map, and `office.py clock-out --badge "<your line>" --result handed-off`.
+7. If the next manager is not running yet: "The next manager", below. Then delete your slot timers. Do no further work in the session, except to pass on a background job's result.
 
 ## The next manager
 
@@ -76,7 +77,7 @@ A fix to a skill or a tool of the foundry itself is the founder's and the user's
 
 ## The hand-off, incoming manager
 
-`/foundry-manager start`. The newest log entry, Now, the notes, the blockers, `brief.crew` and `board.py decide list` are the hand-off. Message each carried-over employee once, so it knows its new manager, and check that its job and finish still stand. Do not read the old session's transcript unless a fact is missing. `recovery.md` covers a counted run left running, a manager that reads UP but is gone, and a host restart.
+`/foundry-manager start`. The newest log entry, the hand-off brief it names, Now, the notes, the blockers, `brief.crew` and `board.py decide list` are the hand-off. Message each carried-over employee once, so it knows its new manager, and check that its job and finish still stand. Do not read the old session's transcript unless a fact is missing. `recovery.md` covers a counted run left running, a manager that reads UP but is gone, and a host restart.
 
 ## Night slots (nobody is there to ask)
 
@@ -84,7 +85,7 @@ Night work runs on what the user decided before the slot:
 
 - **Heavy work:** only if the shift's `heavy_ok` is true. Otherwise the night crew does work that needs no approval (contracts, preregs, docs, reviews, code that is checked later), and the heavy work waits for a slot the user is in.
 - **Starting sessions:** the app starts a session from a card only when the user clicks it. You may start one yourself only when the user told you in words to start that shift's crew. Before a night slot, ask the user at the previous slot's hand-off whether to start the night crew. Record the answer in a note.
-- **Problems:** a problem that needs the user becomes a D-number and a blocker with the owner "the user", and work moves to the next block that does not need them.
+- **Problems:** a problem that needs the user becomes a D-number and a blocker with the owner "the user" (`board.py blocker add --what "..." --owner "the user" --needs D7`), and work moves to the next block that does not need them.
 
 ## Running slots back to back in one session (only on the user's words)
 
@@ -96,4 +97,15 @@ Desktop scheduled tasks at the slot starts, each opening a session with `/foundr
 
 ## Closing a shift of work
 
-When the last block of a shift (or of a push of several shifts) ends: freeze, then the project's full check on a clean main branch (the profile's `measure.sweep`, if it has one), one lane at a time. Every lane that did not PASS becomes a failure with a plan before the next shift is promoted; a milestone whose lane fell goes from done to partial. Write the close note under `paths.handoff`, and name it in the log.
+When the last block of a shift (or of a push of several shifts) ends: the full check, on a clean main branch, one lane at a time. `sweep.py` is that check for any project:
+
+```
+sweep.py run --id <your badge id> --out out/sweeps/<name> [--lanes "G1 G2"] [--queued-at <sha>] [--max-per-lane 3h]
+```
+
+- It runs the profile's `measure.counted` for each lane (every lane the gym knows, unless `--lanes` names them). `--out` is a new folder under a git-ignored one; a sweep's folder is never used twice. `--check-only` does the start checks and runs nothing.
+- It turns the office's freeze on for its whole run and off at its end, with or without a shared resource. With one, each lane also goes through the queue as `<badge id>-sweep` (prio 0, every seat), so the roster and the board see it. It does not start while someone else's freeze is on, or while another sweep is alive (exit 3), and it stops before a lane when its freeze was lifted or replaced (exit 3). `--max-per-lane` and `--wait` take a unit.
+- It checks the tree before and after every lane and stops at once when the main checkout changes under it (exit 4). It does not start when the commits since `--queued-at` can move one of its lanes (exit 5: queue it again at the new sha). A lane that exits non-zero does not stop it; a lane the queue did not run does (exit 6: that lane is "not run", which is no verdict). When every lane ran and one ended with an exit code in `measure.no_verdict_exits` (the runner refused or failed), the sweep exits 1 and `status` lists that lane as run with no verdict.
+- Start it in the background and end the turn; `sweep.py status --out <the folder>` reads where it stands. It commits nothing: commit the run's records as the run's own commit when it ends. A sweep that stopped early, and its freeze: `recovery.md`.
+
+Every lane that did not PASS becomes a failure with a plan before the next shift is promoted; a milestone whose lane fell goes from done to partial (`board.py milestone set M1 --status partial --note "..."`). Write the close note under `paths.handoff`, and name it in the log.

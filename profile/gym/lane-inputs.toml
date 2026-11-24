@@ -1,0 +1,20 @@
+# Which paths can change each gym lane's result. Read by the Foundry's lanes_for.py: given a git range or a list
+# of files it prints the lanes the change touches, for the merge gate and a short sweep. `lanes_for.py check`
+# compares this table with the lanes in gym/run.py.
+#
+# A path is a prefix (a folder ends in "/") or a glob ("*" crosses "/"), from the checkout's top.
+# Add to a lane's `paths` every part of the project its result depends on: the code the contract's command runs,
+# its data, its settings. A lane that lists too little is not selected when it should be.
+#
+# More forms, all optional (lanes_for.py's own help explains each):
+#   [units.<name>]  dir = "src/core", needs = ["util"]     a folder built as one thing, and the units it needs
+#   [groups.<name>] paths = [...], units = [...]           inputs several lanes share; a lane takes them with `uses`
+#   [broad]         paths = ["src/"]                       what a lane with `broad = true` reacts to
+
+version = 1
+
+[always]   # paths that can change every lane
+paths = ["gym/gym_kit.py", "gym/run.py"]
+
+[lanes.G1]
+paths = ["gym/lanes/g1_example.py", "gym/prereg/G1.json", "gym/contracts/G1-artifacts.md"]

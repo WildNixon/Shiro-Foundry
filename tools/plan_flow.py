@@ -2,12 +2,14 @@
 """Plan charts: a plan written as one file, drawn as a flow chart and checked against the tree.
 
     python tools/plan_flow.py list                               every plan under the flow folder, with its counts and problems
-    python tools/plan_flow.py new NAME --title="…" [--question="…"] [--by=LINE]   start NAME.plan.toml there from the template
-    python tools/plan_flow.py build [NAME] [--out=DIR] [--by=LINE]   writes NAME.html and NAME.graph.json (every plan when no NAME)
+    python tools/plan_flow.py new NAME --title "…" [--question "…"] [--by "LINE"]   start NAME.plan.toml there from the template
+    python tools/plan_flow.py build [NAME] [--out DIR] [--by "LINE"]   writes NAME.html and NAME.graph.json (every plan when no NAME)
     python tools/plan_flow.py show NAME ID                       one stage, step, decision or lane, with its links
     python tools/plan_flow.py trace NAME ID [--up|--down]        everything before it, or everything that follows from it
     python tools/plan_flow.py edges NAME                         every link, one per line, then the problems
     python tools/plan_flow.py selftest [NAME]                    the plan's own checks (every plan when no NAME); exit 1 on a problem
+
+An option's value follows it (--title "x") or is joined to it (--title="x"): both forms are read.
 
 A plan chart is a design to judge: stages in order, the steps inside each stage and what each step needs first, the
 decisions that are the user's and the stages each one shapes, and the gym lanes that would close a stage. All of it
@@ -24,12 +26,18 @@ It works on the checkout the shell stands in (the working directory's, so a work
 script's own checkout when the shell is outside any). It writes only under that checkout's paths.flow_out
 (git-ignored), or --out, and `new` writes one file under paths.flow. A write that would land in the main checkout
 (`new` there, a `build` there, or an --out that points into it) takes the manager's badge or the founder's
-(--by "<badge line>"): anyone else works in a worktree, or builds with an --out outside the main checkout. While a
-counted sweep or run is in the shared resource's queue (the freeze), even the manager's `new` is refused there,
-and a build may write only under the main checkout's git-ignored output folder. The tool knows a counted run by
-its queue id (<badge>-sweep, <badge>-counted-<lane>) or prio 0; a whole-resource job under a plain id only gets a
-note, and that freeze is kept by hand. A project with no shared resource has no queue and so no freeze. It
-commits nothing. Standard library only.
+(--by "<badge line>"): anyone else works in a worktree, or builds with an --out outside the main checkout. During
+a freeze even the manager's `new` is refused there, and a build may write only under the main checkout's
+git-ignored output folder. The main checkout is frozen by the same rule the office and the board use: a counted
+sweep or run holds or waits for the shared resource, known by its queue id (<badge>-sweep,
+<badge>-counted[-<lane>]) and never by its priority alone; or the manager's own freeze is on (`office.py freeze on`,
+the office's freeze.json), which is how a project with no shared resource freezes. A prio-0 or whole-resource job
+under a plain id only gets a note, and that freeze is kept by hand. It commits nothing. Standard library only.
+
+Exit code: 0 done; 1 a selftest or build found a problem, or `new` found the plan already there; 2 a command line
+that cannot be read, an unknown plan, or a write into the main checkout without the manager's badge; 3 a write
+into the main checkout refused during a freeze (or while the office cannot be read, so a freeze cannot be ruled
+out): the same code `flow.py graph` and gym_init.py give for the same freeze.
 """
 import datetime as dt
 import json
@@ -117,31 +125,18 @@ def in_main(target):
     return under(target, main)
 
 
-def frozen(office_dir=None):
-    """(runs, maybe), or None when the crew office cannot be read. `runs`: the counted sweeps and runs holding or
-    waiting for the shared resource, known as office.py knows them, by a <badge>-sweep or <badge>-counted id or by
-    prio 0; while one is there nothing in the main checkout may change. `maybe`: whole-resource jobs under a plain
-    id that office.py cannot tell from a counted run (the roster's COUNTED?). office.py's reader turns every
-    unreadable file into an empty queue, so what it would hide is checked here first. A project with no shared
-    resource has no queue: ([], [])."""
-    d, off = flow_graph.office()
-    if off is None:
-        return None
-    d = Path(office_dir) if office_dir else Path(d)
-    if not d.is_dir():
-        return None
-    queue = d / "rq.queue.json"
-    try:
-        if queue.exists() and not isinstance(json.loads(queue.read_text(encoding="utf-8")), list):
-            return None
-        rq = off.rq_facts(d, off.now_ts())
-        if any(h["id"] == "unknown" for h in rq["holds"]):  # a seat is held and its lock does not say by whom
-            return None
-        runs = list(off.sweep_ids(rq))
-        prio0 = list(dict.fromkeys(e["id"] for e in rq["holds"] + rq["queue"] if off.is_prio0(e) and not off.SWEEP_ID.fullmatch(e["id"])))
-        return runs + [i + " (prio 0)" for i in prio0], [i for i in off.unmarked_counted(rq) if i not in prio0]
-    except Exception:  # an office this office.py cannot read is not a clear queue
-        return None
+# The freeze is read by flow_graph.py, for this tool, the graph's edits and gym_init.py alike: one reader, one rule.
+freeze_marker = flow_graph.freeze_marker
+frozen = flow_graph.frozen
+
+
+class Frozen(str):
+    """A refusal for the freeze of the main checkout (exit 3, as `flow.py graph` and gym_init.py give it); any other
+    refusal is a plain text (exit 2)."""
+
+
+def refusal_code(why):
+    return 3 if isinstance(why, Frozen) else 2
 
 
 def refused(opts, what, target):
@@ -157,19 +152,21 @@ def refused(opts, what, target):
     try:
         flow_graph.manager(by if isinstance(by, str) else "")
     except flow_graph.Refused as e:
-        return (f"{what} would write into the main checkout ({target}), which takes the manager's badge: --by=\"<{P.badge_prefix} line>\" ({e}). "
-                "Anyone else: run it from your own worktree" + (", or pass --out=<a folder outside the main checkout>" if what == "build" else "") + ".")
+        return (f"{what} would write into the main checkout ({target}), which takes the manager's badge: --by \"<{P.badge_prefix} line>\" ({e}). "
+                "Anyone else: run it from your own worktree" + (", or pass --out <a folder outside the main checkout>" if what == "build" else "") + ".")
     if not ignored:
         state = frozen()
         if state is None:
-            return f"{what}: the crew office's resource queue could not be read, so a freeze cannot be ruled out; nothing written to {target}."
+            return Frozen(f"{what}: the crew office's resource queue or freeze could not be read, so a freeze cannot be ruled out; nothing written to {target}.")
         runs, maybe = state
         if maybe:
-            print(f"plan_flow: note: {', '.join(maybe)} holds or waits for the whole resource under a plain id (the roster's COUNTED?). "
-                  "This tool sees a counted run only by its id or prio 0: if that job is one, the freeze is yours to keep by hand.", file=sys.stderr)
+            print(f"plan_flow: note: {', '.join(maybe)} holds or waits for the shared resource at prio 0 or as a whole, under a plain id (the roster's COUNTED?). "
+                  "This tool, like the office and the board, sees a counted run only by its queue id: if that job is one, the freeze is yours to keep by hand "
+                  "(`office.py freeze on`).", file=sys.stderr)
         if runs:
-            return (f"{what} would change the main checkout during a freeze: a counted sweep or run is in the resource queue ({', '.join(runs)}). "
-                    "Wait until it ends and its records are committed" + ("; a build into the main checkout's git-ignored output folder is allowed meanwhile." if what == "build" else "."))
+            return Frozen(f"{what} would change the main checkout during a freeze ({'; '.join(runs)}). "
+                          "Wait until the counted run ends, its records are committed and the freeze is lifted"
+                          + ("; a build into the main checkout's git-ignored output folder is allowed meanwhile." if what == "build" else "."))
     return None
 
 
@@ -677,12 +674,12 @@ def new(root, name, opts):
         return 2
     title = opts.get("--title")
     if not isinstance(title, str) or not title.strip():
-        print('plan_flow: new needs --title="what the plan is about"', file=sys.stderr)
+        print('plan_flow: new needs --title "what the plan is about"', file=sys.stderr)
         return 2
     why = write_refused(root, "new", opts)
     if why:
         print("plan_flow: " + why, file=sys.stderr)
-        return 2
+        return refusal_code(why)
     path = root / PLANS / (name + SUFFIX)
     if path.exists():
         print(f"plan_flow: {path} is already there; edit it, or pick another name", file=sys.stderr)
@@ -725,23 +722,45 @@ def usage():
     return 2
 
 
+VALUED = ("--title", "--question", "--by", "--out")  # the options that take a value; every other option is a switch
+
+
+def parse(argv):
+    """(arguments, options). An option's value is joined to it (--out=DIR) or follows it (--out DIR); a valued
+    option with nothing after it, and every switch (--up, --down), is True."""
+    args, opts, i = [], {}, 0
+    while i < len(argv):
+        a = argv[i]
+        i += 1
+        if not a.startswith("--"):
+            args.append(a)
+        elif "=" in a:
+            k, v = a.split("=", 1)
+            opts[k] = v
+        elif a in VALUED and i < len(argv):
+            opts[a] = argv[i]
+            i += 1
+        else:
+            opts[a] = True
+    return args, opts
+
+
 def main(argv, root=None):
     root = root or checkout()
-    args = [a for a in argv if not a.startswith("--")]
-    opts = {a.split("=", 1)[0]: (a.split("=", 1)[1] if "=" in a else True) for a in argv if a.startswith("--")}
+    args, opts = parse(argv)
     cmd = args[0] if args else "list"
     if cmd == "build":
         why = write_refused(root, "build", opts)
         if why:
             print("plan_flow: " + why, file=sys.stderr)
-            return 2
+            return refusal_code(why)
     known = plan_names(root)
     if cmd == "list" and len(args) <= 1:
         for name in known:
             nodes, edges, bad, meta = chart(name)["model"](root)
             print(f"{name:14} {meta.get('plan', {}).get('title', '') or '(no title)'}: {counts(nodes, edges)}, {len(bad)} problems")
         if not known:
-            print(f'no plan under {PLANS.as_posix()}; start one with `plan_flow.py new NAME --title="…"`')
+            print(f'no plan under {PLANS.as_posix()}; start one with `plan_flow.py new NAME --title "…"`')
         return 0
     if cmd == "new" and len(args) == 2:
         return new(root, args[1], opts)

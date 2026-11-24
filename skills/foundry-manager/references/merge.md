@@ -4,8 +4,8 @@ Read this before every merge into the main branch. You merge; employees never do
 
 ## Before the merge
 
-1. **Not during a counted run.** While a counted run is in the queue, waiting or running, nothing merges: the run samples the tree. After it ends, its records are committed first, as the run's own commit, before any merge touches main.
-2. **Start from the hand-in.** `<office>/handins/<id>.md` has the branch, the tip, the changed files and each PROBLEM or warning. A PROBLEM is fixed by the employee before you merge. An employee's report is not proof: read the commits.
+1. **Not during a counted run.** While a counted run is in the queue, waiting or running, or a freeze is on, nothing merges: the run samples the tree. After it ends, its records are committed first, as the run's own commit, before any merge touches main; then the freeze is lifted.
+2. **Start from the hand-in.** `<office>/handins/<id>.md` has the branch, the tip, the changed files and each PROBLEM or warning. A PROBLEM is fixed by the employee before you merge: files outside the badge, a path under `measure.grader_owned` changed by a badge that is not a grader's, a run's records (`measure.records`) changed by a badge that is neither a grader's nor yours, a flagged title's commit without its trailer, a change to the road graph. The grader's files, the records and the road graph are also checked in the branch's tree against the base, so a path marked "the branch's tree differs" is in no commit you were shown: a merge that kept one side, or a commit left out of `--commits`. They are always checked against the main branch as well as the `--base` given: a hand-in run with another `--base` carries a warning saying so, and a walled change made on that other branch is still a PROBLEM. An employee's report is not proof: read the commits.
 3. **Read the range.** `git log --oneline <main>..<branch>`, every commit. Merge by commit, never a branch tip you have not read, and never rewrite the main branch.
 4. **Look for copies.** `git cherry <main> <branch>`. A `-` line is a commit main already has as a copy under another sha: ask the author to rebase onto main first.
 5. **Check the claims against the diff.** The files are the ones in its brief. The grader's files are untouched by a builder. The checks it names ran, and their logs or run folders exist. A test for a fix was shown failing with the fix reverted; if the hand-in does not give both results, ask for the control before you merge.
@@ -26,7 +26,7 @@ It merges at a slot boundary (the hand-off), or earlier when a follow-up builds 
 ## The gate
 
 - Run the project's merge gate from `.foundry/rules.md` on the merged tree. `<py> <tools>/lanes_for.py <range>` lists the gym lanes whose inputs the range touches (`--explain` says why): each gets a dev run before its next counted run, and a past PASS of that lane no longer covers the new code.
-- A full check at each slot's end, if the rules name one.
+- A full check at each slot's end, if the rules name one (the counted sweep of every lane is `sweep.py run`: `shifts.md`, "Closing a shift of work").
 
 ## After the merge
 

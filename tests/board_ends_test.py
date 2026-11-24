@@ -135,6 +135,28 @@ def main():
     expect("a swing badge clocked in hours before its slot still reads none",
            board.user_end(early, b_stray) is None, board.user_end(early, b_stray))
 
+    # `rota slots` writes each slot's research-and-review window from its start; rr_window reads it back, and a
+    # night window that runs past midnight ends the next day
+    rr = getattr(board, "rr_slots", lambda *_: [])(SLOTS, 90)
+    expect("rr_slots: 90 minutes from each slot's start",
+           [s.get("rr") for s in rr] == ["06:00-07:30", "14:00-15:30", "22:00-23:30"], rr)
+    n0 = ts("2030-11-11", "22:00")
+    expect("... and the check reads the night window inside the night slot",
+           board.rr_window({"slots": rr}, "night", n0) == (n0, ts("2030-11-11", "23:30")))
+    rr3 = getattr(board, "rr_slots", lambda *_: [])(SLOTS, 180)
+    expect("a night window past midnight ends the next day",
+           bool(rr3) and rr3[2]["rr"] == "22:00-01:00"
+           and board.rr_window({"slots": rr3}, "night", n0) == (n0, ts("2030-11-12", "01:00")), rr3)
+    try:
+        board.rr_slots(SLOTS, 481)
+        fits = True
+    except (ValueError, AttributeError):
+        fits = False
+    expect("a window longer than a slot is refused", not fits)
+    expect("the user's end set through `rota set` is checked by the same reader (a day slot's 05:00 is refused)",
+           board.read_ends("day", ts("2030-11-11", "06:00"), ts("2030-11-11", "14:00"), "05:00")[1] is not None
+           and board.read_ends("night", n0, ts("2030-11-12", "06:00"), "07:30") == (ts("2030-11-12", "07:30"), None))
+
     for x in ok:
         print(f"  ok   {x}")
     for x in bad:

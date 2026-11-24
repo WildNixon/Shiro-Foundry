@@ -30,7 +30,8 @@ The IDs in the examples are the defaults. A project that names things its own wa
 Rules that hold for every row:
 
 - A row starts at the start of a line with `| ` and its cells are split by ` | ` (one space each side).
-- A cell holds no `|`.
+- A pipe inside a cell is written `\|`. A row that opens like a milestone or decision row and does not parse is
+  named by its line in `flow.py selftest`, and so is an id that stands in two rows.
 - A requirement ID that takes part in a list or a run ends in `-digits` and holds at least one letter: `APP-01`.
   The digits keep their width, so `APP-01–03` is `APP-01`, `APP-02`, `APP-03`.
 
@@ -53,19 +54,17 @@ How the exit cell is read:
 | Written | Read as |
 |---|---|
 | `APP-01, DATA-01` | those two IDs |
-| `APP-01–03` | a run, with an en dash (a hyphen also works for `flow.py`) |
-| `APP-01, 03, 04; DATA-02` | a short list: `APP-01`, `APP-03`, `APP-04`, `DATA-02` (`flow.py` only) |
+| `APP-01–03` | a run, with an en dash (a hyphen also works) |
+| `APP-01, 03, 04; DATA-02` | a short list: `APP-01`, `APP-03`, `APP-04`, `DATA-02` |
 | `APP-01 (basic)` | `APP-01`; what stands in parentheses is a remark |
-| `every P0 PASS` or `All P0` | every requirement of the first tier (`flow.py` only) |
-| `All P0 except REL-04's sign-off; DOC-01` | every first-tier ID but `REL-04`, and `DOC-01` (`flow.py` only) |
+| `every P0`, `every P0 PASS` or `All P0` | every requirement of the first tier |
+| `All P0 except REL-04's sign-off; DOC-01` | every first-tier ID but `REL-04`, and `DOC-01` |
 
-The two tools differ here, so keep to what both read where you can:
-
-- `board.py` reads only numbered stages, and only when the bold cell holds an ID **and** a title (`**R0 Usable**`).
-  It reads full IDs and en-dash runs; it does not read short lists or "every P0".
-- `flow.py` reads numbered stages, late stages and the goal, with or without a title.
-
-So write a numbered stage's exit with full IDs and en-dash runs, and keep "every P0" for a late stage or the goal.
+Both tools read the exit cell with the same code (`board.py` calls `flow.py`'s reader), so every form above means
+the same on the progress map and on the road graph: numbered stages, late stages and the goal, with or without a
+title. An ID the cell names that has no requirement row is counted as missing on the map, and `board.py check`
+names it. Should `flow.py` fail to load, the map falls back to numbered stages with full IDs and en-dash runs, and
+the check says so.
 
 Order on the road: the numbered stages by number, then each late stage, then the goal. Every numbered stage leads
 to the first stage after them.
@@ -94,6 +93,11 @@ Four cells: the ID, the theme, **Closes** and **Why here**.
   graph (`flow.py graph seed`), the links are read from the graph, and this prose is only compared against it.
 
 A milestone also holds every requirement whose **Where** cell names it (see below).
+
+The map's own milestone list (`state.milestones`) follows these rows: `board.py milestone sync` adds every
+milestone the tables name and the state lacks (planned, with the row's theme as its title and its lane), and
+rewrites the title and lane of a planned one nothing has touched. `milestone sync --prune` removes the planned,
+untouched ones the tables no longer name. A milestone that work has touched is left as it is.
 
 ### Milestone sections (optional)
 
@@ -199,27 +203,49 @@ Five cells: the ID, the decision, **Where it stands**, the owner, **Needed befor
 A milestone's Why here that names the decision gates the whole milestone too, unless Needed before narrows it to
 some IDs.
 
+The table and the decision register (`state.decisions`, written by `board.py decide`) share their ids.
+`board.py decide adopt D<n>` gives a row its register entry, `decide adopt D<n> --refresh` reads a reworded row
+again, and `board.py decide ask` gives a new question the id after the highest of both. `board.py check` warns when
+the table names an open decision the register lacks, when the two disagree on whether one is answered, when a row
+was not read, and when one id stands in two rows.
+
+## The starter's first line
+
+The roadmap `founder.py init` writes is this page's complete example under one more line, its first:
+`<!-- STARTER: ... -->`. While a roadmap opens with `<!-- STARTER`, its rows are examples: `board.py init` takes no
+milestone and no decision from it, and `board.py check` does not compare it with the state. Take the line out when
+you write the real roadmap, then run `board.py milestone sync` and `board.py decide adopt` for each decision.
+
 ## A complete minimal roadmap
 
 Two stages, three milestones, six requirements, two decisions. `flow.py selftest` accepts it with 0 problems
-(in a project that has nothing else yet, each missing input is a NOTE line).
+(in a project that has nothing else yet, each missing input is a NOTE line), and `board.py check` has no warning
+about it.
+
+It is the starter a new project gets, so nothing in it is met by a lane: no row is `PASS` and no milestone is
+done, because a new project has no lane that could back one (`board.py` warns about a `PASS` row whose lane it
+cannot find). The shape of a `PASS` row is under "Requirement rows" above (`| APP-01 | P0 | PASS | M1 | G1 graded
+it |`: the status word, and the lane's name in Where or the note), and a finished milestone's bullet is under
+"Milestone sections" (`done (G1 PASS)`). When a lane passes, change the row's status, name the lane and its run in
+the note, and bring the Count table into line.
 
 ```markdown
 # Example roadmap to 1.0
 
 A complete, minimal roadmap in the shapes `flow.py` and `board.py` read (the foundry-founder skill's `references/roadmap-format.md` explains each).
 Copy it to `docs/ROADMAP.md`, keep the tables, and replace the rows with your own.
+Nothing in it is met by a lane yet, as in a new project: a row becomes `PASS` when its gym lane has graded it.
 
 ## Stages
 
 | Stage | Theme | Exit (requirement IDs) | Milestones | Now |
 |---|---|---|---|---|
-| **R0 Usable** | One person can do the main job from start to end | APP-01–02, DATA-01 | M1, M2 | M1 done |
-| **1.0 Release** | Ready for anyone | every P0 PASS; DOC-01 | M3 | — |
+| **R0 Usable** | One person can do the main job from start to end | APP-01–02, DATA-01 | M1, M2 | M1 in work |
+| **1.0 Release** | Ready for anyone | every P0; DOC-01 | M3 | — |
 
 ## Milestones
 
-- **M1 Skeleton (lane G1):** done (G1 PASS). → APP-01.
+- **M1 Skeleton (lane G1):** in work; G1 has no counted run yet. → APP-01.
 
 **Lanes** (each milestone's gym lane): M1 G1, M2 G2, M3 none yet.
 
@@ -233,8 +259,8 @@ Copy it to `docs/ROADMAP.md`, keep the tables, and replace the rows with your ow
 
 | ID | P | Status | Where | Note |
 |---|---|---|---|---|
-| APP-01 | P0 | PASS | M1 | G1 graded it |
-| APP-02 | P0 | Part | M2 | editing works; undo is missing |
+| APP-01 | P0 | Part | M1 | the screen shows; G1 has not graded it yet |
+| APP-02 | P0 | Planned | M2 | editing, with undo |
 | DATA-01 | P0 | Planned | M2 | waits on D2 |
 | DATA-02 | P0 | Open | M3 | backups: no design yet |
 | DOC-01 | P1 | Planned | M3 | the user guide |
@@ -244,7 +270,7 @@ Copy it to `docs/ROADMAP.md`, keep the tables, and replace the rows with your ow
 
 | P | PASS | Part | Planned | Decided | Open | Total |
 |---|---|---|---|---|---|---|
-| **P0** | 1 | 1 | 1 | 1 | 1 | 5 |
+| **P0** | 0 | 1 | 2 | 1 | 1 | 5 |
 | **P1** | 0 | 0 | 1 | 0 | 0 | 1 |
 | **P2** | 0 | 0 | 0 | 0 | 0 | 0 |
 

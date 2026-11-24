@@ -34,7 +34,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 
 DEFAULTS = {
     "project": "",                 # the project's name as people say it; empty: the main checkout's folder name
@@ -92,6 +92,8 @@ DEFAULTS = {
         "status": "",              # a command that prints the resource's own health (disk, memory)
         "default_max": "30m",
         "shell": "",               # the shell a queued command line runs in; empty: bash on PATH, else sh
+        "enforce_max": False,      # true: a `run` job still going at its --max plus max_grace is ended (exit 124)
+        "max_grace": "2m",
     },
     "measure": {                   # how "done" is decided: the gym
         "done_means": "the milestone's gym lane says PASS",
@@ -99,7 +101,7 @@ DEFAULTS = {
         "counted": "",             # the command of a counted run, with <lane>
         "dev": "",                 # the command of a dev (uncounted) run
         "sweep": "",               # the command that runs every lane, if the project has one
-        "grader_owned": ["gym/prereg", "gym/lanes", "gym/run.py"],
+        "grader_owned": ["gym/prereg", "gym/lanes", "gym/run.py", "gym/gym_kit.py"],
         "records": ["gym/series", "gym/charts", "gym/grades"],
         "selftest": "",            # the gym's own selftest command
         "grader_no_read": [],      # paths a grader never opens (the builder's code)
@@ -109,6 +111,8 @@ DEFAULTS = {
         "vendored_paths": [],      # globs a badge should not own without saying so
         "unit_manifests": [],      # lanes_for.py: globs of the build units' manifest files
         "not_built": ["tests/", "benches/", "examples/", "*.md"],  # lanes_for.py: paths that move no lane
+        "sweep_skip": [],          # sweep.py: globs left out of its "did the tree move" check
+        "no_verdict_exits": [2, 3],  # sweep.py: exit codes of the counted command that mean "no verdict"
     },
     "roadmap": {                   # the shape of ROADMAP.md's tables (the foundry-founder skill: references/roadmap-format.md)
         "requirement_id": r"[A-Z0-9]+-\d+",
@@ -122,6 +126,7 @@ DEFAULTS = {
     },
     "board": {
         "phases_title": "Phases",  # the heading over state.phases
+        "absolute_commands": False,  # true: the map prints tool commands with absolute paths
     },
     "git": {
         "push": False,             # the crew never pushes unless the founder's profile says so
@@ -129,6 +134,7 @@ DEFAULTS = {
         "worktrees": ".claude/worktrees",
         "branch_prefix": "claude/",
     },
+    "titles": {},                  # extra hire cards: name -> {like, role, kinds, does, may_write, hands_in, independent}
     "models": {},                  # role or title -> model id; empty: the session's own
     "flagged": {},                 # title -> {"model": ..., "trailer": ...}: work that gets a heavy review
     "crews": {},                   # other crews that work this way: name -> {"lessons": "<path to their outbox>"}
@@ -180,6 +186,35 @@ def _merge(base, over):
         else:
             base[k] = v
     return base
+
+
+def _shape_problems(doc, like=None, pre=""):
+    """Keys of a profile whose value is not the kind the defaults have (a table written as a string, a list as a
+    number). A wrong kind would otherwise surface as a traceback deep in some tool."""
+    like = DEFAULTS if like is None else like
+    out = []
+    for k, v in doc.items():
+        if k not in like:
+            continue
+        want = like[k]
+        if isinstance(want, dict):
+            if not isinstance(v, dict):
+                out.append(f"`{pre}{k}` must be a table ([{pre}{k}]), not {type(v).__name__}")
+            elif want:
+                out.extend(_shape_problems(v, want, f"{pre}{k}."))
+        elif isinstance(want, list):
+            if not isinstance(v, list):
+                out.append(f"`{pre}{k}` must be a list, not {type(v).__name__}")
+        elif isinstance(want, bool):
+            if not isinstance(v, bool):
+                out.append(f"`{pre}{k}` must be true or false, not {type(v).__name__}")
+        elif isinstance(want, (int, float)):
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                out.append(f"`{pre}{k}` must be a number, not {type(v).__name__}")
+        elif isinstance(want, str):
+            if not isinstance(v, str):
+                out.append(f"`{pre}{k}` must be text in quotes, not {type(v).__name__}")
+    return out
 
 
 def _coerce(text, like):
@@ -288,26 +323,46 @@ class Profile:
         return sorted(out, key=lambda s: s["start"])
 
 
-def load(start=None):
-    """The profile for the checkout `start` lies in (a script's __file__, a folder, or the working directory)."""
+def load(start=None, strict=True):
+    """The profile for the checkout `start` lies in (a script's __file__, a folder, or the working directory).
+
+    A profile file that exists and cannot be read is never replaced by the defaults in silence: a tool running on
+    the defaults would look for the office in another folder, lose the shared resource and with it the counted-run
+    freeze, and forget which files only a grader may change. So load() says what is wrong on stderr and exits 2.
+    strict=False returns the defaults with the trouble listed in `.problems` (for `where`, `founder.py doctor` and
+    the hooks, which must go on)."""
     root = checkout(start)
     main = main_checkout(root)
     data = copy.deepcopy(DEFAULTS)
     file, problems = None, []
     env = os.environ.get("FOUNDRY_PROFILE")
     candidates = [Path(env)] if env else [root / ".foundry" / "foundry.toml", main / ".foundry" / "foundry.toml"]
+    if env and not Path(env).is_file():  # a mistyped name must not mean "the defaults"
+        problems.append(f"{env}: FOUNDRY_PROFILE names no file")
     for c in candidates:
         if c.is_file():
             try:
                 with open(c, "rb") as f:
-                    _merge(data, tomllib.load(f))
-                file = c
-            except (OSError, tomllib.TOMLDecodeError) as e:
+                    doc = tomllib.load(f)
+                wrong = _shape_problems(doc)
+                if wrong:
+                    problems.extend(f"{c}: {w}" for w in wrong)
+                else:
+                    _merge(data, doc)
+                    file = c
+            except UnicodeDecodeError as e:  # saved as UTF-16 by an editor or a shell redirect
+                problems.append(f"{c}: not UTF-8 text ({e.reason} at byte {e.start}); save it as UTF-8")
+            except (OSError, ValueError, RecursionError) as e:  # TOMLDecodeError is a ValueError
                 problems.append(f"{c}: {e}")
             break
     _env_overrides(data)
     p = Profile(data, root, main, file)
     p.problems = problems
+    if problems and strict:
+        for line in problems:
+            print(f"foundry: the profile cannot be read: {line}", file=sys.stderr)
+        print("foundry: fix the file (`foundry_profile.py where` checks it); nothing was done", file=sys.stderr)
+        raise SystemExit(2)
     return p
 
 
@@ -354,8 +409,33 @@ def selftest():
             for k in ("FOUNDRY_PATHS_OFFICE", "FOUNDRY_LIMITS_USAGE_STOP", "FOUNDRY_RESOURCE_SEATS"):
                 os.environ.pop(k)
             (root / ".foundry" / "foundry.toml").write_text("project = [broken", encoding="utf-8")
-            p = load(root)
+            p = load(root, strict=False)
             check("a broken file is reported, defaults stand", p.problems and p.badge_prefix == "FB1")
+            import contextlib, io
+            code = None
+            with contextlib.redirect_stderr(io.StringIO()) as err:
+                try:
+                    load(root)
+                except SystemExit as e:
+                    code = e.code
+            check("a broken file stops a tool: exit 2, the reason on stderr",
+                  code == 2 and "cannot be read" in err.getvalue())
+            (root / ".foundry" / "foundry.toml").write_bytes('project = "x"\n'.encode("utf-16"))
+            p = load(root, strict=False)
+            check("a file that is not UTF-8 is a problem, not a traceback", any("not UTF-8" in x for x in p.problems))
+            (root / ".foundry" / "foundry.toml").write_text('paths = "x"\n[resource]\nseats = "a"\n[limits]\nusage_stop = "80"\n',
+                                                            encoding="utf-8")
+            p = load(root, strict=False)
+            check("wrong kinds are named, the defaults stand",
+                  len(p.problems) == 3 and p.rel("office") == "out/foundry" and p.get("limits.usage_stop") == 80)
+            (root / ".foundry" / "foundry.toml").write_text('project = "ok"\n[titles.x]\nlike = "fixer"\n[models]\nbuilder = "m"\n',
+                                                            encoding="utf-8")
+            p = load(root, strict=False)
+            check("free tables (titles, models) take any keys", not p.problems and p.get("titles.x.like") == "fixer")
+            os.environ["FOUNDRY_PROFILE"] = str(root / "nope.toml")
+            p = load(root, strict=False)
+            check("FOUNDRY_PROFILE naming no file is a problem", any("names no file" in x for x in p.problems))
+            os.environ.pop("FOUNDRY_PROFILE")
             check("defaults were not mutated", DEFAULTS["paths"]["office"] == "out/foundry" and DEFAULTS["badge_prefix"] == "FB1")
     finally:
         os.environ.update(saved)
@@ -369,7 +449,7 @@ def main(argv):
     cmd = argv[1] if len(argv) > 1 else "show"
     if cmd == "selftest":
         return selftest()
-    p = load()
+    p = load(strict=False)
     if cmd == "where":
         print(f"checkout       {p.root}")
         print(f"main checkout  {p.main}")
@@ -380,7 +460,9 @@ def main(argv):
     if cmd == "show":
         v = p.get(argv[2]) if len(argv) > 2 else p.data
         print(json.dumps(v, indent=1, ensure_ascii=False))
-        return 0
+        for line in p.problems:  # what is printed above is then the defaults, not the file
+            print(f"PROBLEM the profile cannot be read, so these are the defaults: {line}", file=sys.stderr)
+        return 1 if p.problems else 0
     print(__doc__)
     return 2
 

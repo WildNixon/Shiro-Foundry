@@ -209,9 +209,12 @@ STATUSES = ("PASS", "Part", "Planned", "Decided", "Open")
 REQ_ROW = re.compile(r"^\| (?P<id>" + RID + r") \| (?P<p>" + TIER + r")(?:→(?P<to>" + TIER + r")\*)? \| (?P<status>"
                      + "|".join(STATUSES) + r") \| (?P<where>[^|]*) \|", re.M)
 NAMED_ROW = re.compile(r"^\| \*\*(?P<name>[^*|]+)\*\* \| (?P<theme>[^|]*) \| (?P<exit>[^|]*) \|", re.M)
-MS_ROW = re.compile(r"^\| (?P<id>" + MS + r") \| (?P<theme>[^|]*) \| (?P<closes>[^|]*) \| (?P<why>[^|]*) \|", re.M)
+# one cell of a milestone or decision row: up to the next pipe that no backslash escapes (a cell may hold `\|`)
+CELL = r"(?:\\.|[^|\\\n])*"
+MS_ROW = re.compile(r"^\| (?P<id>" + MS + r") \| (?P<theme>" + CELL + r") \| (?P<closes>" + CELL + r") \| (?P<why>" + CELL + r") \|", re.M)
 MS_BULLET = re.compile(r"^- \*\*(?P<head>" + MS + r"\b[^*]*)\*\*(?P<tail>.*)$", re.M)
-DEC_ROW = re.compile(r"^\| (?P<id>" + DEC + r") \| (?P<what>[^|]*) \| (?P<stands>[^|]*) \| (?P<owner>[^|]*) \| (?P<need>[^|]*) \|", re.M)
+DEC_ROW = re.compile(r"^\| (?P<id>" + DEC + r") \| (?P<what>" + CELL + r") \| (?P<stands>" + CELL + r") \| (?P<owner>" + CELL
+                     + r") \| (?P<need>" + CELL + r") \|", re.M)
 COUNT_ROW = re.compile(r"^\| \*\*(?P<p>" + TIER + r")\*\* \| " + r" \| ".join([r"(\d+)"] * 6) + r" \|", re.M)
 MS_ID = re.compile(r"(?<![\w-])" + MS + r"(?!\w)")
 DEC_ID = re.compile(r"(?<![\w-])" + DEC + r"(?!\w)")
@@ -221,6 +224,11 @@ LANE_PAIR = re.compile(r"(?<![\w-])(?P<ms>" + MS + r") (?P<lane>" + LANE + r")")
 # one ID, or a run of them: 'SET-01–03'
 ID_RUN = re.compile(r"(?<![\w-])(?P<id>" + RID + r")(?:[–-](?P<to>\d+))?(?!\w)")
 MET = ("PASS", "Decided")
+
+
+def cell(m, name):
+    """One cell of a parsed row as its text: an escaped pipe is a pipe."""
+    return m[name].replace("\\|", "|")
 
 
 def found(rx, text):
@@ -294,11 +302,24 @@ def shape_warnings(text, reqs):
     """Rows of the roadmap that look like table rows this script reads but did not parse, and the roadmap's own
     Count table against the rows that did."""
     w = []
-    for name, start, rx in (("requirement", r"^\| " + RID + r" \|", REQ_ROW), ("milestone", r"^\| " + MS + r" \|", MS_ROW),
-                            ("decision", r"^\| " + DEC + r" \|", DEC_ROW)):
-        seen, got = len(list(re.finditer(start, text, re.M))), len(list(rx.finditer(text)))
-        if seen != got:
-            w.append(f"{seen - got} {name} row(s) in {ROADMAP} did not parse (an unknown status word, or a missing cell)")
+    seen, got = len(list(re.finditer(r"^\| " + RID + r" \|", text, re.M))), len(list(REQ_ROW.finditer(text)))
+    if seen != got:
+        w.append(f"{seen - got} requirement row(s) in {ROADMAP} did not parse (an unknown status word, or a missing cell)")
+    # a milestone or decision row: every line that starts like one must parse, and an id stands in one row only
+    lines = text.split("\n")
+    for name, start, rx, cells in (("milestone", re.compile(r"\| " + MS + r" \|"), MS_ROW, 4), ("decision", re.compile(r"\| " + DEC + r" \|"), DEC_ROW, 5)):
+        first = {}
+        for n, line in enumerate(lines, 1):
+            if not start.match(line):
+                continue
+            m = rx.match(line)
+            if not m:
+                w.append(f"{ROADMAP} line {n}: a {name} row that did not parse (it needs {cells} cells, each closed by a pipe; "
+                         f"a pipe inside a cell is written \\|): {line.strip()[:90]}")
+            elif m["id"] in first:
+                w.append(f"{ROADMAP} line {n}: {name} {m['id']} already has a row (line {first[m['id']]}); an id stands in one row")
+            else:
+                first[m["id"]] = n
     for m in COUNT_ROW.finditer(text):
         c = collections.Counter(q["status"] for q in reqs.values() if q["p"] == m["p"])
         given = [int(x) for x in m.groups()[-6:-1]]
@@ -335,8 +356,10 @@ def parse_roadmap(text):
                        "ids": exit_ids(m["exit"], reqs)}
     ms = {}
     for m in MS_ROW.finditer(text):
-        why = m["why"].strip()
-        ms[m["id"]] = {"theme": plain(m["theme"]), "closes": ids_in(m["closes"]), "why": plain(why),
+        if m["id"] in ms:
+            continue  # a second row for the same id is a problem line (shape_warnings); the first row stands
+        why = cell(m, "why").strip()
+        ms[m["id"]] = {"theme": plain(cell(m, "theme")), "closes": ids_in(cell(m, "closes")), "why": plain(why),
                        "deps": [x for x in dict.fromkeys(found(MS_ID, why)) if x != m["id"]],
                        "dgates": list(dict.fromkeys(found(DEC_ID, why))), "last": why.startswith("Last")}
     lanes = {}
@@ -353,7 +376,9 @@ def parse_roadmap(text):
         lanes.setdefault(m["ms"], m["lane"])
     decisions, warns = {}, shape_warnings(text, reqs)
     for m in DEC_ROW.finditer(text):
-        stands, need = m["stands"].strip(), m["need"].strip()
+        if m["id"] in decisions:
+            continue  # as for a milestone: the first row stands, the second is a problem line
+        stands, need = cell(m, "stands").strip(), cell(m, "need").strip()
         # decided only on the word itself: any other wording keeps the gate, and an unknown one is flagged
         if stands.startswith("**Decided"):
             state = "part" if "Still open" in stands else "decided"
@@ -369,7 +394,7 @@ def parse_roadmap(text):
             t, par = g["t"], g["par"]
             ids = [i for i in ids_in(par or "", parens=True) if i in reqs]
             targets[t] = None if (t in targets and targets[t] is None) or not ids else targets.get(t, []) + ids
-        decisions[m["id"]] = {"id": m["id"], "what": plain(m["what"]), "stands": plain(stands), "owner": m["owner"].strip(),
+        decisions[m["id"]] = {"id": m["id"], "what": plain(cell(m, "what")), "stands": plain(stands), "owner": cell(m, "owner").strip(),
                               "need": plain(need), "state": state, "targets": targets,
                               # IDs named beside the targets: 'M28 (SEC-06); the rest of SHELL-03 and SHELL-04'
                               "extra": [i for i in ids_in(GATE.sub(" ", need), parens=True) if i in reqs]}
@@ -1452,6 +1477,34 @@ def logic_checks():
         check("the Count table agrees", warns == [], warns)
         check("a wrong Count is told", any("Count table" in w for w in parse_roadmap(FIXTURE.replace("| 1 | 1 | 0 | 0 | 1 | 3 |", "| 2 | 1 | 0 | 0 | 1 | 4 |"))[5]))
         check("an unknown status word is told", any("did not parse" in w for w in parse_roadmap(FIXTURE.replace("| Open | M3 |", "| Later | M3 |"))[5]))
+        # a pipe inside a cell, escaped: the row keeps its five cells, each with its own text
+        piped = parse_roadmap(FIXTURE.replace("| D2 | Two | Open: which store |", "| D2 | Two \\| or three | Open: a \\| b |"))
+        d2 = piped[4].get("D2", {})
+        check("a decision row with an escaped pipe parses, cell by cell", piped[5] == [] and d2.get("what") == "Two | or three"
+              and d2.get("stands") == "Open: a | b" and d2.get("owner") == "the user" and d2.get("targets") == {"M2": ["DATA-01"], "R0": None}, (d2, piped[5]))
+        piped = parse_roadmap(FIXTURE.replace("| M2 | Data |", "| M2 | Data \\| more |"))
+        check("a milestone row with an escaped pipe parses", piped[5] == [] and piped[2]["M2"]["theme"] == "Data | more"
+              and piped[2]["M2"]["deps"] == ["M1"], (piped[2].get("M2"), piped[5]))
+        # a row that starts like one and does not parse is a problem that names its line
+        n2 = FIXTURE.split("\n").index("| D2 | Two | Open: which store | the user | M2 (DATA-01); R0's exit |") + 1
+        for what, text in (("a decision row with a cell missing", FIXTURE.replace("| D2 | Two | Open: which store | the user |", "| D2 | Two | Open: which store |")),
+                           ("a decision row with no closing pipe", FIXTURE.replace("R0's exit |", "R0's exit")),
+                           ("a decision row with a pipe that is not escaped", FIXTURE.replace("| D2 | Two |", "| D2 | Two | or three | x | y |"))):
+            got = parse_roadmap(text)
+            told = [w for w in got[5] if f"line {n2}:" in w and "decision row" in w]
+            check(f"{what} is told with its line" if "not escaped" not in what else f"{what} is read as the cells it makes (nothing can tell)",
+                  bool(told) if "not escaped" not in what else got[4]["D2"]["what"] == "Two", got[5])
+        n3 = FIXTURE.split("\n").index("| M3 | Ship | DATA-02 | Last. After M2 |") + 1
+        got = parse_roadmap(FIXTURE.replace("| M3 | Ship | DATA-02 | Last. After M2 |", "| M3 | Ship | DATA-02 |"))
+        check("a milestone row with a cell missing is told with its line", any(f"line {n3}:" in w and "milestone row" in w for w in got[5])
+              and "M3" not in got[2], got[5])
+        # the same id in two rows
+        got = parse_roadmap(FIXTURE.replace("| D2 | Two |", "| D1 | Again | Open: no | the user | M2 |\n| D2 | Two |"))
+        check("a decision id in two rows is told, and the first row stands",
+              any("decision D1 already has a row" in w for w in got[5]) and got[4]["D1"]["state"] == "decided", got[5])
+        got = parse_roadmap(FIXTURE.replace("| M3 | Ship |", "| M1 | Again | DATA-02 | Later |\n| M3 | Ship |"))
+        check("a milestone id in two rows is told, and the first row stands",
+              any("milestone M1 already has a row" in w for w in got[5]) and got[2]["M1"]["theme"] == "Start", got[5])
     else:
         print("NOTE the profile names its own roadmap shapes, so the fixture checks (written in the default shapes) were skipped")
     with tempfile.TemporaryDirectory(prefix="foundry-flow-selftest-") as td:

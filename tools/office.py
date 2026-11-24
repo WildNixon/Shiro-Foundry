@@ -8,11 +8,18 @@
                                                     clocks out, and the roster shows it on its own line above the manager
     office.py appoint --name NAME [--relieve] [--session local_...] [--this-slot | --slot day|swing|night]
                                                     mint the one MANAGER badge (refused while another is fresh)
-    office.py hire --by MGR_LINE --name N --role R --kind session|temp --job TEXT --eta 90m
+    office.py hire --by MGR_LINE --name N (--role R | --title T) --kind session|temp --job TEXT --eta 90m
                    [--lane G1] [--rq | --seat NAME] [--files TEXT] [--done-when TEXT] [--force-files] [--adr]
+                   [--model ID [--force-model]]
+                                                    --role: builder, grader, reviewer or scout;
+                                                    --title: the card the badge is hired on, which sets the role
+                                                    (see Titles below); refused when the title is unknown, its
+                                                    profile card is broken, or the kind is not one the card allows;
                                                     --rq: the badge reaches the shared resource through rq.py run
                                                     --id <its id> (any seat); --seat: one seat of its own;
-                                                    --adr: reserve the next decision-record number for it
+                                                    --adr: reserve the next decision-record number for it;
+                                                    --model: the model the brief names, kept on the roster (for a
+                                                    flagged title a model other than its own needs --force-model)
     office.py assign ID --session local_... [--by MGR_LINE] [--dry-run]
                                                     record the session that start_session returned (a manager's or a
                                                     founder's too); --by, when given, is the manager's line
@@ -26,7 +33,8 @@
                                                     --run: a run folder of yours, recorded by its absolute
                                                     path so a grader finds it without a relay
     office.py me --badge LINE                       your own record: the brief again, what the manager amended,
-                                                    the manager on the clock, a counted-run freeze, your place in
+                                                    the manager on the clock, a freeze (the manager's, or a counted
+                                                    run in the queue), your place in
                                                     the queue and an estimate of its start; writes nothing
     office.py status [--badge LINE]                 `me` with a badge, the roster without one
     office.py runs [--id EMP-07]                    the run folders the crew posted (newest first)
@@ -45,10 +53,54 @@
     office.py end-shift --by MGR_LINE [--lose-temps] [--out crew.json]
                                                     the slot's crew summary; a temp still working stays on
                                                     the clock (--lose-temps clocks every temp out as lost)
+    office.py freeze on --by MGR_LINE --why TEXT [--lane G1] [--max 3h]   (--max takes a unit: 30m, 3h)
+    office.py freeze off --by MGR_LINE [--note TEXT] [--force]   (--force: lift a counted sweep's own freeze)
+    office.py freeze show [--json]                  hold the main checkout still for a counted run, with or without
+                                                    a shared resource: the roster and every `me` say FREEZE while it
+                                                    is on, and past --max it reads STALE. on and off are punches in
+                                                    the time clock; a second `on` is refused until `off`
+    office.py round [--by MGR_LINE] [--json]        the manager's wake-up: what needs the manager, most pressing
+                                                    first (usage, what waits on the user, a counted run or freeze,
+                                                    reports not filed, new hand-ins, STALE or OVERDUE crew, the
+                                                    journal's plan), then the crew, the seats and `first: ...`.
+                                                    With --by it also posts the manager's heartbeat and marks the
+                                                    listed hand-ins seen; without it, it writes nothing
+    office.py handoff --by MGR_LINE [--out FILE]    write the next manager's hand-off brief as Markdown (default
+                                                    <office>/briefs/handoff-<slot>-<YYYYMMDD>.md) and print its
+                                                    path; three sections are left for the manager to fill by hand.
+                                                    Never overwrites: a second call writes <name>-2
+    office.py timers init --by MGR_LINE             write <office>/manager-timers.json when it is missing: the round,
+                                                    and each slot's hand-off (40 min before its end) and start
+    office.py timers show                           print the list and check its shape (exit 1: a bad entry, or no
+                                                    file). The tool creates no timer: the manager creates them in
+                                                    its session, and this file is the list
     office.py verify LINE | badge ID                check a line; redraw a plate
     journal.py ...                                  the shift journal (holes, failures, improvements and their
                                                     action plan), its own script on this office's badges
     office.py selftest
+
+Exit codes: 0 done; 1 a check that found something (handin NOT READY, timers show with a bad entry or no file);
+2 a command line that cannot be read, or a --files path whose folder is missing; 3 refused (the message says why).
+
+Titles. A badge is hired on a card. The built-in cards: builder and fixer (role BUILDER, session or temp), grader
+(GRADER, session only, independent), reviewer (REVIEWER, session or temp, independent), scout, triager and cleaner
+(SCOUT, temp or session). A card says what the title does, what it may write and what it hands in, and the brief
+prints it as "Your card (title)". --role alone hires on the role's own card. A project adds or changes a card in
+the profile:
+
+    [titles.auditor]
+    like = "reviewer"                 # a built-in card to start from
+    kinds = ["session"]               # and any of: role, kinds, does, may_write, hands_in, independent
+
+Models. The brief prints `Model: <id>` when the profile's [models] names the title or the role (the title first),
+or when the hire gave --model. A title with a [flagged.<title>] table (model, trailer) is built on that model, the
+brief says every commit ends with the trailer, and handin makes a commit without the trailer line a PROBLEM. The
+brief's push rule follows git.push: false (the default) is "no push"; true is "push only your own branch, never the
+main branch".
+
+Office files this adds: freeze.json ({"by", "why", "lane", "at", "max_s"}; absent means no freeze; other tools read
+it through freeze_facts()), handins-seen.json ({"seen": {file name: its time stamp}, "at", "by"}),
+manager-timers.json ({"timers": [{"name", "recurring", "every" or "at", "prompt"}]}) and briefs/handoff-*.md.
 
 A badge is one signed line that starts with the profile's badge prefix, drawn as a QR plate (HMAC-SHA256, base32,
 QR alphanumeric). Clocking in is presenting the line; every punch is appended to timeclock.jsonl and the roster is
@@ -169,6 +221,13 @@ def badge_prefix():
     return p or "FB1"
 
 
+try:  # optional: draws the badges' QR plates
+    import segno as _segno  # noqa: F401
+    HAVE_SEGNO = True
+except ImportError:
+    HAVE_SEGNO = False
+
+
 class Refused(Exception):
     """A punch or a hire the office will not take; the message says why."""
 
@@ -217,10 +276,13 @@ def token(s, n=24):
     return re.sub(r"-{2,}", "-", t)[:n] or "NA"
 
 
-def parse_dur(s):
-    """90m, 2h, 1h30m, 45 (minutes) -> seconds."""
+def parse_dur(s, unit=False):
+    """90m, 2h, 1h30m, 45 (minutes) -> seconds. With unit=True a bare number is refused, as rq.py and sweep.py
+    refuse one (freeze --max); --eta alone still reads a bare number as minutes."""
+    if unit and re.fullmatch(r"\s*\d+(?:\.\d+)?\s*", str(s)):
+        raise Refused(f"cannot read the duration {s!r}: write a unit: 30m, 3h")
     m = re.fullmatch(r"\s*(?:(\d+(?:\.\d+)?)h)?\s*(?:(\d+)m?)?\s*", str(s))
-    if not m or not (m.group(1) or m.group(2)):
+    if not m or not (m.group(1) or m.group(2)) or (unit and m.group(2) and not str(s).strip().endswith("m")):
         raise Refused(f"cannot read the duration {s!r}; write 90m, 2h or 1h30m")
     return int(float(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60)
 
@@ -459,8 +521,12 @@ def verify_line(key, roster, line):
 
 
 def plate(d, rec):
-    """The QR plate (segno: error M, alphanumeric, scale 4, border 4), black on white so it scans in dark mode."""
-    import segno
+    """The QR plate (segno: error M, alphanumeric, scale 4, border 4), black on white so it scans in dark mode.
+    segno is optional: without it the badge is its signed line alone, no plate is drawn, and this returns None."""
+    try:
+        import segno
+    except ImportError:
+        return None
     qr = segno.make_qr(rec["line"], error="m", mode="alphanumeric", boost_error=False)
     (d / "badges").mkdir(parents=True, exist_ok=True)
     out = d / "badges" / f"{rec['id']}.svg"
@@ -795,9 +861,10 @@ def crew(d, now=None):
                     "vm_start": rq_start, "vm_start_why": rq_start_why,
                     "run": next((e["run"] for e in reversed(prog) if e.get("run")), None),
                     "note": next((e.get("note") for e in reversed(evs) if e.get("note")), ""),
-                    "plate": str(d / "badges" / f"{bid}.svg")})
+                    # null when no plate was drawn (no segno): never the name of a file that is not there
+                    "plate": str(d / "badges" / f"{bid}.svg") if (d / "badges" / f"{bid}.svg").is_file() else None})
     return {"dir": str(d), "now": now, "founder": roster.get("founder"), "manager": roster.get("manager"), "badges": out,
-            "reports": [e for e in events if e["ev"] == "fail"],
+            "reports": [e for e in events if e["ev"] == "fail"], "freeze": freeze_facts(d, now),
             "vm": {"holds": rq["holds"], "queue": rq["queue"], "sweeps": sweep_ids(rq, now),
                    "unmarked": unmarked_counted(rq), "dev": dev_uncounted(rq)}}
 
@@ -806,6 +873,244 @@ def headcount(c):
     """Employees that count against the shift's crew_max: hired and not clocked out, revoked ones aside. The founder
     and the manager are outside it."""
     return [b for b in c["badges"] if b["role"] not in TOP and b["status"] in ("HIRED", "UP", "STALE", "OVERDUE")]
+
+
+# --- titles: the card a badge is hired on ---
+# A title is a card: the role its badge carries, the kinds it may be hired as, whether it must be independent of
+# the build, and one line each for what it does, what it may write and what it hands in. Seven are built in; a
+# project adds or changes cards in the profile ([titles.<name>] with like = "<built-in>" plus any field).
+# {reviews}, {research} and {grader_owned} in a card's text are filled in from the profile when it is printed.
+
+_WRITES_OWN = "the files its badge owns, in its own worktree or on its own branch"
+TITLE_CARDS = {
+    "builder": {"role": "BUILDER", "kinds": ["session", "temp"], "independent": False,
+                "does": "builds what the job names, with the tests that show it works",
+                "may_write": _WRITES_OWN,
+                "hands_in": "its commits, the tests it ran with their results, and a report through handin"},
+    "fixer": {"role": "BUILDER", "kinds": ["session", "temp"], "independent": False,
+              "does": "fixes one filed failure: reproduces it, fixes the cause, and shows the test that now passes",
+              "may_write": _WRITES_OWN,
+              "hands_in": "its commits, the failure's id, and the test that failed before and passes now"},
+    "grader": {"role": "GRADER", "kinds": ["session"], "independent": True,
+               "does": "grades one lane, independent of the build: writes the lane's measure before the run and reads "
+                       "the verdict the grader's code prints",
+               "may_write": "only the measure's files ({grader_owned})",
+               "hands_in": "the pinned measure and the verdict word, quoted from the grader's output"},
+    "reviewer": {"role": "REVIEWER", "kinds": ["session", "temp"], "independent": True,
+                 "does": "reads a change or a plan it had no part in and says GO or NO-GO, its findings ranked by severity",
+                 "may_write": "its review file only (under {reviews}/)",
+                 "hands_in": "the review file: each finding with its file and line"},
+    "scout": {"role": "SCOUT", "kinds": ["temp", "session"], "independent": False,
+              "does": "reads and reports: research, a survey, a question answered with its sources",
+              "may_write": "its report file only (under {research}/)",
+              "hands_in": "the report file"},
+    "triager": {"role": "SCOUT", "kinds": ["temp", "session"], "independent": False,
+                "does": "sorts failure reports: reproduces each, names the cause or the next check, and drafts its "
+                        "failure entry",
+                "may_write": "its report file only (under {research}/)",
+                "hands_in": "one entry per report: the report's id, the cause, an owner and a plan"},
+    "cleaner": {"role": "SCOUT", "kinds": ["temp", "session"], "independent": False,
+                "does": "cleans up at a shift's end: worktrees and branches already merged, leftovers on the shared "
+                        "resource",
+                "may_write": "nothing in the tree; it removes only what its brief lists",
+                "hands_in": "the list of what it removed and what it left, each with the reason"},
+}
+CARD_TEXTS = ("does", "may_write", "hands_in")
+
+
+def title_cards():
+    """{title: card} in force: the built-in cards, then the profile's [titles.<name>] over them. A profile card
+    starts from the built-in its `like` names (its own name when that is a built-in) and replaces any of role, kinds,
+    does, may_write, hands_in, independent. A card the profile wrote wrongly keeps a `problem` text, and hire
+    refuses that title with it."""
+    cards = {k: {**v, "kinds": list(v["kinds"])} for k, v in TITLE_CARDS.items()}
+    table = prof().get("titles") or {}
+    for name, t in (table.items() if isinstance(table, dict) else []):
+        name = str(name).strip().lower()
+        if not isinstance(t, dict):
+            cards[name] = {**cards.get(name, {}), "problem": f"[titles.{name}] is not a table"}
+            continue
+        like = str(t.get("like") or (name if name in TITLE_CARDS else "")).strip().lower()
+        if like and like not in TITLE_CARDS:
+            cards[name] = {"problem": f"[titles.{name}] like = {like!r} names no built-in card "
+                                      f"({', '.join(TITLE_CARDS)})"}
+            continue
+        base = TITLE_CARDS.get(like)
+        card = ({**base, "kinds": list(base["kinds"])} if base else
+                {"role": "", "kinds": ["session", "temp"], "independent": False, "does": "", "may_write": "", "hands_in": ""})
+        if like and like != name:
+            card["like"] = like
+        problems = []
+        if "role" in t:
+            card["role"] = str(t["role"]).strip().upper()
+        if card["role"] not in ROLES or card["role"] in TOP:
+            problems.append(f"role {card['role'] or '(none)'!r} is not one of "
+                            f"{', '.join(r for r in ROLES if r not in TOP)} (give `like` or `role`)")
+        if "kinds" in t:
+            raw = t["kinds"] if isinstance(t["kinds"], list) else re.split(r"[,\s]+", str(t["kinds"]))
+            kinds = [str(k).strip().lower() for k in raw if str(k).strip()]
+            if not kinds or any(k.upper() not in KINDS for k in kinds):
+                problems.append(f"kinds {t['kinds']!r}: a list of session, temp")
+            else:
+                card["kinds"] = kinds
+        for k in CARD_TEXTS:
+            if k in t:
+                card[k] = str(t[k]).strip()
+        if "independent" in t:
+            if isinstance(t["independent"], bool):
+                card["independent"] = t["independent"]
+            else:
+                problems.append(f"independent {t['independent']!r}: true or false")
+        if problems:
+            card["problem"] = f"[titles.{name}]: " + "; ".join(problems)
+        cards[name] = card
+    return cards
+
+
+def title_of(rec):
+    """A badge's title: the one it was hired on, else its role's own card (a badge from before titles)."""
+    return str(rec.get("title") or rec.get("role", "")).lower()
+
+
+def title_text(rec):
+    """The title as the roster prints it: `fixer (builder)`, or the role alone when the title is the role's own."""
+    t, role = title_of(rec), str(rec.get("role", "")).lower()
+    return role if t == role else f"{t} ({role})"
+
+
+def card_lines(rec):
+    """The brief's "Your card (title)" block, or [] for a badge whose title has no card (the founder, the manager)."""
+    title = title_of(rec)
+    card = title_cards().get(title)
+    if not card or card.get("problem"):
+        return []
+    p = prof()
+    fill = {"{reviews}": p.rel("reviews").strip("/"), "{research}": p.rel("research").strip("/"),
+            "{grader_owned}": ", ".join(str(x) for x in (p.get("measure.grader_owned") or [])) or "none listed"}
+
+    def text(k):
+        s = card.get(k) or "(the card does not say)"
+        for a, b in fill.items():
+            s = s.replace(a, b)
+        return s
+    head = f"Your card ({title}): role {card['role'].lower()}; hired as {' or '.join(card['kinds'])}"
+    if card.get("independent"):
+        head += "; independent: you had no part in what you judge, and you take no word of its author for a result"
+    return [head, f"    Does: {text('does')}", f"    May write: {text('may_write')}", f"    Hands in: {text('hands_in')}"]
+
+
+def flagged_of(title):
+    """The profile's [flagged.<title>] ({"model": ..., "trailer": ...}) with its values as stripped text, or None.
+    Work under a flagged title is built on the model named there, and every commit of it ends with the trailer, so a
+    reviewer finds each one for an in-depth review."""
+    f = prof().get("flagged") or {}
+    t = f.get(title) if isinstance(f, dict) else None
+    if not isinstance(t, dict):
+        return None
+    return {"model": str(t.get("model") or "").strip(), "trailer": str(t.get("trailer") or "").strip()}
+
+
+def model_of(rec):
+    """(model id, where it comes from) for a badge, or ('', ''): the hire's own --model, else [flagged.<title>]'s
+    model, else the profile's [models] by title, then by role."""
+    if rec.get("model"):
+        return str(rec["model"]), "hire --model"
+    title, role = title_of(rec), str(rec.get("role", ""))
+    fl = flagged_of(title)
+    if fl and fl["model"]:
+        return fl["model"], f"[flagged.{title}]"
+    models = prof().get("models") or {}
+    for k in (title, role.lower(), role.upper()):
+        if isinstance(models, dict) and models.get(k):
+            return str(models[k]).strip(), f"[models] {k}"
+    return "", ""
+
+
+def model_lines(rec):
+    """The brief's Model line, and the trailer line of a flagged title."""
+    out = []
+    model, _ = model_of(rec)
+    if model:
+        out.append(f"Model: {model} (the manager sets the session to it; say in your first progress note which model "
+                   "you run on)")
+    fl = flagged_of(title_of(rec))
+    if fl and fl["trailer"]:
+        out.append(f"Every commit of yours ends with the trailer: {fl['trailer']}. Your commits get an in-depth review.")
+    return out
+
+
+def push_text():
+    """The brief's push rule, by the profile's git.push: false (the default) is no push at all."""
+    v = prof().get("git.push", False)
+    on = v.strip().lower() in ("1", "true", "yes", "on") if isinstance(v, str) else bool(v)
+    return "push only your own branch, never the main branch" if on else "no push"
+
+
+# --- the freeze: the main checkout held still for a counted run, with or without a queue ---
+
+FREEZE_FILE = "freeze.json"
+FREEZE_AT_MIN, FREEZE_AT_MAX = 946684800.0, 4102444800.0  # 2000-01-01 .. 2100-01-01 UTC: seconds, not milliseconds
+FREEZE_MAX_S = 366 * 86400  # no freeze is meant to last past a year
+SEEN_FILE = "handins-seen.json"
+TIMERS_FILE = "manager-timers.json"
+
+
+def freeze_facts(d=None, now=None):
+    """The freeze the manager set with `office.py freeze on`, for every tool that must not write the main checkout
+    during a counted run: {"on", "by", "why", "lane", "at", "max_s", "stale"}. The office's freeze.json is the
+    state: absent means off. `stale` is True once now is past at + max_s (a freeze with no limit is never stale):
+    the run it covered has probably ended and nobody lifted it. A file that cannot be read counts as a freeze in
+    force, with the reason in `why`: a tool that cannot tell holds still."""
+    d = office_dir() if d is None else Path(d)
+    now = now_ts() if now is None else now
+    off = {"on": False, "by": None, "why": "", "lane": None, "at": None, "max_s": None, "stale": False}
+    f = d / FREEZE_FILE
+    if not f.exists():
+        return off
+    try:
+        j = json.loads(f.read_text(encoding="utf-8"))
+        if not isinstance(j, dict):
+            raise ValueError("not an object")
+        at = j["at"]
+        if isinstance(at, bool) or not isinstance(at, (int, float, str)):
+            raise TypeError("at is not a number")
+        at = float(at)
+        if not FREEZE_AT_MIN <= at <= FREEZE_AT_MAX:  # nan and the infinities fail this too
+            raise ValueError("at is not a time in seconds")
+        local(at)  # a time this system cannot show is not a sane time
+        max_s = j.get("max_s")
+        if max_s is not None:
+            if isinstance(max_s, bool) or not isinstance(max_s, (int, float, str)):
+                raise TypeError("max_s is not a number")
+            max_s = float(max_s)
+            if not 0 <= max_s <= FREEZE_MAX_S:
+                raise ValueError("max_s is not a sane length")
+            max_s = int(max_s)
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError) as e:
+        return {**off, "on": True, "by": "unknown",
+                "why": f"{FREEZE_FILE} cannot be read ({type(e).__name__}: {str(e)[:80]}): the manager sets it again "
+                       "or lifts it"}
+    return {"on": True, "by": str(j.get("by") or "unknown"), "why": str(j.get("why") or ""),
+            "lane": (str(j["lane"]) if j.get("lane") else None), "at": at, "max_s": max_s,
+            "stale": bool(max_s is not None and now > at + max_s)}
+
+
+def freeze_text(fz, now):
+    """One line for a freeze in force: who, since when, which lane, its limit, why. Never an exception: a time or
+    a length that cannot be shown is said so, in every place that prints a freeze (roster, me, round, handoff)."""
+    since = limit = ""
+    try:
+        since = f" since {hhmm(fz['at'], now)}" if fz.get("at") is not None else ""
+    except (OverflowError, OSError, ValueError, TypeError):
+        since = " since a time that cannot be shown"
+    lane = f", lane {fz['lane']}" if fz.get("lane") else ""
+    try:
+        if fz.get("max_s") is not None and fz.get("at") is not None:
+            limit = f", limit {ago(fz['max_s'])} (to {hhmm(fz['at'] + fz['max_s'], now)})"
+    except (OverflowError, OSError, ValueError, TypeError):
+        limit = ", limit cannot be shown"
+    stale = " STALE? it is past its limit;" if fz.get("stale") else ""
+    return f"by {fz['by']}{since}{lane}{limit}:{stale} {fz['why'] or '(no reason given)'}"
 
 
 # --- the commands ---
@@ -1107,6 +1412,9 @@ def cmd_appoint(a, d, now):
         print(f"a counted sweep or run is in the queue of {res_name()} ({', '.join(sweeps)}): it is a background job of "
               "the session that started it. Do not stop or archive that session, and change nothing in the main "
               "checkout until it ends.")
+    if c["freeze"]["on"]:
+        print(f"the main checkout is frozen {freeze_text(c['freeze'], now)}. Change nothing there until the run it "
+              f"covers has ended and its records are committed; then lift it: {cmd} freeze off --by \"<your line>\"")
     return 0
 
 
@@ -1141,15 +1449,49 @@ def reserve_adr(d, repo, now):
 def cmd_hire(a, d, now):
     key = load_key(d)
     state = read_state()
-    role, kind = a.role.upper(), a.kind.upper()
-    if role not in ROLES or role in TOP:
-        raise Refused(f"role {a.role!r}: hire one of {', '.join(r for r in ROLES if r not in TOP)}")
+    kind = a.kind.upper()
+    cards = title_cards()
+    title = (getattr(a, "title", None) or "").strip().lower()
+    if title:
+        # --title sets the role: the card names it
+        card = cards.get(title)
+        if card is None:
+            raise Refused(f"title {a.title!r}: the known titles are {', '.join(sorted(cards))} (a project adds one "
+                          "as [titles.<name>] with like = \"<built-in>\" in .foundry/foundry.toml)")
+        if card.get("problem"):
+            raise Refused(f"title {title}: its card in the profile is broken: {card['problem']}")
+        role = card["role"]
+        if a.role and a.role.upper() != role:
+            raise Refused(f"--title {title} is a {role} card and --role says {a.role.upper()}: give --title alone, or "
+                          "the title whose card has that role")
+    elif a.role:
+        role = a.role.upper()
+        if role not in ROLES or role in TOP:
+            raise Refused(f"role {a.role!r}: hire one of {', '.join(r for r in ROLES if r not in TOP)}")
+        title = role.lower()  # the role's own card
+        card = cards.get(title) or {}
+        if card.get("problem"):
+            raise Refused(f"role {a.role}: its card in the profile is broken: {card['problem']}")
+    else:
+        raise Refused("hire needs --role or --title")
     if kind not in KINDS:
         raise Refused(f"kind {a.kind!r}: session or temp")
     if role == "GRADER" and kind != "SESSION":
         raise Refused("a GRADER is its own session: a subagent of the manager is not independent of the build")
+    if card.get("kinds") and kind.lower() not in card["kinds"]:
+        raise Refused(f"title {title} is hired as {' or '.join(card['kinds'])}, not as a {kind.lower()}"
+                      + (": its card says independent, and a subagent of the manager is not" if card.get("independent") else ""))
     if role == "GRADER" and not a.lane:
         raise Refused("a GRADER is hired for a lane (--lane G1)")
+    model = (getattr(a, "model", None) or "").strip()
+    flagged = flagged_of(title)
+    if flagged is not None and not (flagged["model"] or flagged["trailer"]):
+        raise Refused(f"[flagged.{title}] in the profile names neither a model nor a trailer: give it `model`, "
+                      "`trailer` or both, or take the table out")
+    if (flagged and flagged["model"] and model and model != flagged["model"]
+            and not getattr(a, "force_model", False)):
+        raise Refused(f"title {title} is flagged: its work is built on {flagged['model']} ([flagged.{title}] model), "
+                      f"not {model}. Drop --model, or pass --force-model if the user said so")
     forced = refuse_bad_files(a.files, a.force_files)
     with locked(d):
         roster = read_roster(d)
@@ -1176,10 +1518,18 @@ def cmd_hire(a, d, now):
         adr = {"adr": reserve_adr(d, main_checkout(), now)} if a.adr else {}  # under the office lock
         rec = mint(d, key, roster, prefix="EMP" if kind == "SESSION" else "TMP", name=a.name, role=role, kind=kind,
                    state=state, now=now, slot=hslot, job=a.job, done_when=a.done_when or "", lane=a.lane or "", vmdir=seat,
-                   files=a.files or "", eta_s=parse_dur(a.eta), by=mgr["id"], **adr)
+                   files=a.files or "", eta_s=parse_dur(a.eta), by=mgr["id"], title=title,
+                   **({"model": model} if model else {}), **adr)
         write_roster(d, roster)
     plate(d, rec)
-    print(f"hired {rec['id']} {rec['name']} ({role.lower()}, {kind.lower()}); crew {len(hc) + 1} of {crew_max} on {shift_id}")
+    print(f"hired {rec['id']} {rec['name']} ({title_text(rec)}, {kind.lower()}); crew {len(hc) + 1} of {crew_max} on {shift_id}")
+    m_id, m_from = model_of(rec)
+    if m_id:
+        print(f"  model: {m_id} ({m_from}): set the session to it before it starts"
+              + ("; a temp runs on the model its Agent call names" if kind == "TEMP" else ""))
+    if flagged and flagged["trailer"]:
+        print(f"  flagged title: every commit ends with `{flagged['trailer']}` (handin checks it); its commits get an "
+              "in-depth review")
     if rec.get("adr"):
         print(f"  ADR {rec['adr']} reserved for {rec['id']} ({(d / ADR_COUNTER).as_posix()})")
     for w in forced:
@@ -1322,7 +1672,7 @@ def brief(rec, mgr, state=None):
     cmd = tool()
     res = res_name()
     lines = [
-        f"You are a {p.project} employee, badge {rec['id']} ({rec['name']}, {rec['role'].lower()}), hired by the manager {mgr['id']}.",
+        f"You are a {p.project} employee, badge {rec['id']} ({rec['name']}, {title_text(rec)}), hired by the manager {mgr['id']}.",
         f"First invoke the {p.skill('employee')} skill and follow it. Then clock in before any other work:",
         f"    {cmd} clock-in --badge \"{rec['line']}\"",
         "",
@@ -1330,6 +1680,8 @@ def brief(rec, mgr, state=None):
     ]
     if rec.get("done_when"):
         lines.append(f"Done when: {rec['done_when']}")
+    lines += card_lines(rec)
+    lines += model_lines(rec)
     if rec.get("lane"):
         extra = ""
         if rec["role"] == "GRADER":
@@ -1340,7 +1692,7 @@ def brief(rec, mgr, state=None):
                      + (f"; you own only {', '.join(owned)}" if owned else "") + ")")
         lines.append(f"Lane: {rec['lane']}" + extra)
     if rec.get("files"):
-        lines.append(f"Files you own: {rec['files']} (touch nothing else; git add -- <paths> only; no push)")
+        lines.append(f"Files you own: {rec['files']} (touch nothing else; git add -- <paths> only; {push_text()})")
         hits = vendored_hits(rec["files"])  # the employee reads it too
         if hits:
             lines.append(f"Vendored, never edited in place: {', '.join(hits)}. Leave it unless the job says you "
@@ -1397,8 +1749,8 @@ def brief(rec, mgr, state=None):
         lines.append("While a counted sweep or run is queued or running (the roster says COUNTED SWEEP or run), commit "
                      "nothing in the main checkout, not even a report: commit in your own worktree.")
     else:
-        lines.append("While a counted run is going (the manager says when), commit nothing in the main checkout, not "
-                     "even a report: commit in your own worktree.")
+        lines.append(f"While a counted run is going (you see it as FREEZE in `{cmd} me`), commit nothing in the main "
+                     "checkout, not even a report: commit in your own worktree.")
     lines += [
         f"You never hire, start sessions, appoint, promote, or edit {p.rel('state')} or the map.",
         "If blocked, message the manager on the clock, not the session that started you: managers change every slot, and",
@@ -1596,6 +1948,25 @@ def git(args, cwd=None, timeout=60):
     except (OSError, subprocess.SubprocessError):
         return None, ""
     return r.returncode, r.stdout
+
+
+_FOLD = {}
+
+
+def path_fold(top):
+    """The function that makes two spellings of one path equal in the checkout at `top`: os.path.normcase and lower
+    case where the file system does not tell Gym/Prereg from gym/prereg (found once per checkout: are the repo's
+    .git and .GIT the same path?), else the path as it is. Paths here use /, as git prints them."""
+    key = str(top)
+    if key not in _FOLD:
+        try:
+            a = Path(top) / ".git"
+            _FOLD[key] = bool(a.exists() and (Path(top) / ".GIT").exists() and os.path.samefile(a, Path(top) / ".GIT"))
+        except OSError:
+            _FOLD[key] = False
+    if _FOLD[key]:
+        return lambda p: os.path.normcase(str(p)).replace("\\", "/").lower()
+    return lambda p: str(p)
 
 
 def owned_patterns(files, base=None):
@@ -1892,8 +2263,10 @@ def handin_checks(rec, repo, base, commits, c, report=None):
     # the tree: every untracked file by its own path; the report passed with --file is not a
     # leftover while it is untracked (an edited tracked report is); and in the main checkout, which every employee
     # there shares, only paths this badge owns are this badge's to commit
-    _, st = git(["status", "--porcelain", "--no-renames", "--untracked-files=all"], top)
-    rows = [(l[:2], l[3:].strip().strip('"')) for l in st.splitlines() if l.strip()]
+    # every list of names is read with -z and split on NUL: git prints a name that holds a quote, a backslash or a
+    # control character quoted otherwise, and a quoted name matches no wall
+    _, st = git(["status", "--porcelain", "-z", "--no-renames", "--untracked-files=all"], top)
+    rows = [(l[:2], l[3:]) for l in st.split("\0") if len(l) > 3]
     if report:
         try:
             rel = Path(report).resolve().relative_to(top.resolve()).as_posix()
@@ -1911,25 +2284,125 @@ def handin_checks(rec, repo, base, commits, c, report=None):
         bad.append(f"the tree is not clean ({len(dirty)} path(s), first: {dirty[0]}): commit your files or "
                    "remove the leftovers; the manager merges commits, not a working tree")
     # the files against the badge
-    changed = []
-    for s in shas:
-        _, out = git(["show", "--no-renames", "--name-only", "--format=", s], top)
-        changed += [f.strip() for f in out.splitlines() if f.strip()]
-    changed = sorted(set(changed))
+    def names(out):
+        return [f.lstrip("\n") for f in out.split("\0") if f.strip("\n")]
+
+    def commit_files(sha_list):
+        out_ = []
+        for s in sha_list:
+            _, out = git(["show", "--no-renames", "--name-only", "-z", "--format=", s], top)
+            out_ += names(out)
+        return sorted(set(out_))
+
+    changed = commit_files(shas)
     facts["files"] = changed
+    # The walls look at more than each commit's own list: a merge that kept one parent's copy (`git merge -s ours`)
+    # prints nothing in `git show --name-only`, and --commits a,b names only some commits. So the branch's whole
+    # difference from the base counts too: what it changed since the fork (base...HEAD) and where its tree differs
+    # from the base as it is now (base HEAD). A path in the second list alone is the branch's doing only when the
+    # branch's copy is not the fork point's: where the base alone moved on since the fork (the branch is behind),
+    # a merge takes the base's copy and nothing is lost, so that path is not held against the badge.
+    # And the walls always stand against the profile's main branch as well as the base given: --base names the
+    # branch a badge was cut from (for the own-files check), and a walled change made on that branch, or a --base
+    # HEAD, would otherwise pass unseen.
+    mainb = main_branch()
+    wall_bases = [base]
+    if mainb != base:
+        rc, _ = git(["rev-parse", "--verify", "--quiet", mainb + "^{commit}"], top)
+        if rc == 0:
+            wall_bases.append(mainb)
+            warn.append(f"--base is {base}, not the main branch {mainb}: your own files were checked against {base}; the "
+                        f"road graph, the measure's files and the run records were checked against both {base} and {mainb}")
+        elif rec.get("role") != "MANAGER":
+            bad.append(f"cannot check the walls: no {mainb} here (--base is {base}, and the road graph, the measure's "
+                       f"files and the run records are always checked against the main branch {mainb}). Run handin in a "
+                       "checkout of the project's own repository")
+        else:
+            warn.append(f"no {mainb} here: the walls were checked against {base} only")
+
+    def blob(rev, path):
+        rc, out = git(["rev-parse", "--verify", "--quiet", f"{rev}:{path}"], top)
+        return out.strip() if rc == 0 else ""
+
+    def wall_view(b):
+        """One base's view: (files of the commits looked at, since-the-fork files, files only differing now, forks)."""
+        if b == base:
+            in_commits = changed
+        else:  # the main branch: every commit past it, whatever --base or --commits named
+            _, out = git(["rev-list", f"{b}..HEAD"], top)
+            in_commits = sorted(set(changed) | set(commit_files(out.split())))
+        since_fork, now_differs = [], []
+        for into, spec in ((since_fork, [f"{b}...HEAD"]), (now_differs, [b, "HEAD"])):
+            rc, out = git(["diff", "--no-renames", "--name-only", "-z", *spec], top)
+            if rc == 0:
+                into += names(out)
+            else:
+                warn.append(f"`git diff --name-only {' '.join(spec)}` did not run: the branch's tree was not checked "
+                            "against the road graph, the measure's files and the run records; say so in the hand-in")
+        _, mbs = git(["merge-base", "--all", b, "HEAD"], top)
+        return (in_commits, sorted(set(since_fork) - set(in_commits)),
+                sorted(set(now_differs) - set(since_fork) - set(in_commits)), mbs.split())
+
+    views = [(b, wall_view(b)) for b in wall_bases]
+    facts["tree_files"] = views[0][1][1]
+    fold = path_fold(top)
+
+    def named(prefixes, whole=True):
+        """(the walled paths, each with where it was seen; a sentence on the tree's ones) or ([], ''). A path is
+        walled when it is one of the prefixes or under it (whole=False: when it starts with one)."""
+        pre = [fold(w) for w in prefixes]
+
+        def hit(f):
+            g = fold(f)
+            return any((g == w or g.startswith(w + "/")) if whole else g.startswith(w) for w in pre)
+
+        a, b, seen = [], [], set()
+        for _, (in_commits, _, _, _) in views:
+            for f in in_commits:
+                if hit(f) and f not in seen:
+                    seen.add(f)
+                    a.append(f)
+        for bname, (_, tree, behind_only, forks) in views:
+            for f in sorted(tree + behind_only):
+                if f in seen or not hit(f):
+                    continue
+                # a path that differs only now is the branch's doing when its copy is not every fork point's
+                if f in tree or not forks or any(blob(m, f) != blob("HEAD", f) for m in forks):
+                    seen.add(f)
+                    b.append((f, bname))
+        out = [f"{f} (in a commit)" for f in a] + [f"{f} (the branch's tree differs from {bn})" for f, bn in b]
+        how = ("" if not b else f" A path marked as the tree differing is in no commit checked here: a merge that "
+               f"kept one side (`git merge -s ours`) or a commit not named in --commits. `git diff --name-only "
+               f"{b[0][1]} HEAD` lists it, and merging this branch would put your copy in place of {b[0][1]}'s.")
+        return out, how
+
+    def listed(hit):
+        return ", ".join(hit[:6]) + (" …" if len(hit) > 6 else "")
+
+    def prof_list(key):
+        v = prof().get(key) or []
+        return [str(w).replace("\\", "/").strip("/") for w in (v if isinstance(v, list) else [v]) if str(w).strip("/\\")]
+
     # the road graph is the manager's: flow.py graph takes the manager's badge
-    road = [f for f in changed if f.startswith(prof().rel("flow").strip("/") + "/road.")]
+    road, how = named([prof().rel("flow").strip("/") + "/road."], whole=False)
     if road and rec.get("role") not in TOP:
-        bad.append(f"your commits change the road graph ({', '.join(road)}): only the manager edits it, through "
-                   "`flow.py graph ... --by <the manager's line>`. Take the change out and ask the manager for it")
+        bad.append(f"your branch changes the road graph ({listed(road)}): only the manager edits it, through "
+                   "`flow.py graph ... --by <the manager's line>`. Take the change out and ask the manager for it." + how)
     # the measure is the grader's: the wall between the one who builds and the one who grades
     if rec.get("role") != "GRADER":
-        walls = [str(w).replace("\\", "/").strip("/") for w in (prof().get("measure.grader_owned") or []) if str(w).strip("/\\")]
-        graded = [f for f in changed if any(f == w or f.startswith(w + "/") for w in walls)]
+        graded, how = named(prof_list("measure.grader_owned"))
         if graded:
-            bad.append(f"your commits change the measure's files ({', '.join(graded[:6])}{' …' if len(graded) > 6 else ''}): "
+            bad.append(f"your branch changes the measure's files ({listed(graded)}): "
                        "only a grader writes what the profile lists under measure.grader_owned. Take the change out and "
-                       "send the grader a patch or a written request")
+                       "send the grader a patch or a written request." + how)
+    # a run's records decide what the map shows as PASS: the run writes them, whoever queued it commits them
+    if rec.get("role") not in ("GRADER", "MANAGER"):
+        recs, how = named(prof_list("measure.records"))
+        if recs:
+            bad.append(f"your branch changes a run's records ({listed(recs)}): a run's records are written by the run "
+                       "and committed by whoever queued the counted run (the manager, or a grader), never by the "
+                       "badge that built what is measured (measure.records in the profile). Take the change out; if a "
+                       "counted run wrote them in your worktree, tell the manager, who commits them." + how)
     if pats:
         outside = [f for f in changed if not owns(pats, f)]
         if outside:
@@ -1979,6 +2452,19 @@ def handin_checks(rec, repo, base, commits, c, report=None):
                     "if it is one, use GIT_AUTHOR_NAME/GIT_AUTHOR_EMAIL/GIT_COMMITTER_* in the command's environment "
                     "instead; if it is not, say so in the hand-in")
     warn += pinned_warnings(top, base, changed)
+    # a flagged title: every commit of the badge ends with the profile's trailer, so the in-depth review finds it
+    fl = flagged_of(title_of(rec))
+    if fl and fl["trailer"] and shas:
+        bare = []
+        for s in shas:
+            _, msg = git(["log", "-1", "--format=%B", s], top)
+            if fl["trailer"] not in [l.strip() for l in msg.splitlines()]:
+                bare.append(s[:8])
+        if bare:
+            bad.append(f"{len(bare)} commit(s) lack the trailer line `{fl['trailer']}` ({', '.join(bare[:6])}"
+                       f"{' …' if len(bare) > 6 else ''}): the title {title_of(rec)} is flagged for an in-depth review "
+                       "([flagged] in the profile), and the review finds a commit by that line. Reword each commit on "
+                       "your own branch so its message ends with it (never a commit already merged)")
     # the project's own hand-in check
     hc_bad, hc_warn, hc_fact = project_handin_check(top, changed)
     if hc_fact:
@@ -1990,6 +2476,10 @@ def handin_checks(rec, repo, base, commits, c, report=None):
     if c["vm"]["sweeps"] or c["vm"].get("unmarked"):
         warn.append(f"a counted sweep or run is (or may be) in the queue of {res_name()}: commit nothing in the main checkout and put no "
                     "file there; the manager merges after it ends")
+    fz = c.get("freeze") or {}
+    if fz.get("on"):
+        warn.append(f"the main checkout is frozen ({freeze_text(fz, c.get('now'))}): commit nothing there and put no "
+                    "file there; the manager merges after the freeze is lifted")
     return bad, warn, facts
 
 
@@ -2039,7 +2529,7 @@ def cmd_handin(a, d, now):
         old = out.read_text(encoding="utf-8", errors="replace")
         body = old.split(mark, 1)[1].strip() if mark in old else ""
     verdict = "READY" if not bad else "NOT READY"
-    lines = [f"# Hand-in {rec['id']} {rec['name']} ({rec['role'].lower()}): {verdict}",
+    lines = [f"# Hand-in {rec['id']} {rec['name']} ({title_text(rec)}): {verdict}",
              "",
              f"- checked {local(now):%Y-%m-%d %H:%M %Z} by `office.py handin`{' (run by ' + by + ')' if by else ''}: "
              f"{len(bad)} problem(s), {len(warn)} warning(s)",
@@ -2120,8 +2610,11 @@ def cmd_me(a, d, now):
     me = next(b for b in c["badges"] if b["id"] == rec["id"])
     mgr = next((b for b in c["badges"] if b["id"] == c["manager"]), None)
     eta = f"finish ~{hhmm(me['eta'], now)}" if me.get("eta") else "no estimate"
-    print(f"{rec['id']} {rec['name']} ({rec['role'].lower()}, {rec['kind'].lower()}): {me['status']} {me['pct']}% {eta}; "
+    print(f"{rec['id']} {rec['name']} ({title_text(rec)}, {rec['kind'].lower()}): {me['status']} {me['pct']}% {eta}; "
           f"last heard {hhmm(me['heard'], now)}; session {rec.get('session') or 'not recorded'}")
+    m_id, m_from = model_of(rec)
+    if m_id:
+        print(f"your model: {m_id} ({m_from})")
     if mgr:
         print(f"manager on the clock: {mgr['id']} {mgr['name']} ({mgr['status']}), session {mgr.get('session') or 'not recorded'}"
               + (f"; you were hired by {rec['by']}" if rec.get("by") and rec["by"] != mgr["id"] else ""))
@@ -2146,6 +2639,12 @@ def cmd_me(a, d, now):
         elif hits is not None and keys:
             print(f"no review merged to {mb} {since} names {', '.join(keys)}")
     rq, res = c["vm"], res_name()
+    fz = c["freeze"]
+    if fz["on"]:  # the manager's own freeze, with or without a queue
+        print(f"FREEZE: the main checkout is frozen {freeze_text(fz, now)}. Change nothing in the main checkout, "
+              "tracked or not; commit only in your worktree")
+    elif not has_resource():
+        print("no freeze on the main checkout")
     if not has_resource():
         pass  # no shared resource in the profile: no queue, so no queue lines
     elif rq["sweeps"]:
@@ -2277,7 +2776,7 @@ def cmd_roster(a, d, now):
     for b in on:
         eta = f"finish ~{hhmm(b['eta'], now)} ({'in ' + ago(b['eta'] - now) if b['eta'] >= now else ago(now - b['eta']) + ' late'})" if b["eta"] else "no estimate"
         sess = f" {b['session']}" if b.get("session") else ""
-        print(f"    {b['id']} {b['name']} {b['role'].lower()} {b['kind'].lower()}{sess}: {b.get('status_text') or b['status']} {b['pct']}% {eta}; "
+        print(f"    {b['id']} {b['name']} {title_text(b)} {b['kind'].lower()}{sess}: {b.get('status_text') or b['status']} {b['pct']}% {eta}; "
               f"heard {hhmm(b['heard'], now)}" + (f"; {res}: {b['vm']}" if b.get("vm") else "") +
               (f"; \"{b['note']}\"" if b["note"] else ""))
         print(f"        job: {b.get('job', '')}")
@@ -2293,8 +2792,12 @@ def cmd_roster(a, d, now):
     if done:
         print(f"  clocked out this slot ({len(done)}):")
         for b in done:
-            print(f"    {b['id']} {b['name']} {b['role'].lower()}: {b['result']} at {hhmm(b['out_at'], now)}, {b['hours']:.1f} h")
+            print(f"    {b['id']} {b['name']} {title_text(b)}: {b['result']} at {hhmm(b['out_at'], now)}, {b['hours']:.1f} h")
     rq = c["vm"]
+    fz = c["freeze"]
+    if fz["on"]:
+        print(f"  FREEZE {freeze_text(fz, now)}. Change nothing in the main checkout, tracked or untracked, until the "
+              f"manager lifts it ({tool()} freeze off)")
     if rq["holds"] or rq["queue"]:
         print(f"  {res} (a running job is a hold, not a queue entry: check here before telling anyone to re-queue):")
         for h in rq["holds"]:
@@ -2357,6 +2860,579 @@ def cmd_end_shift(a, d, now):
     return 0
 
 
+def freeze_is_sweeps(fz):
+    """Was this freeze set by a counted sweep (sweep.py writes why "counted sweep" and its own id as `by`)?"""
+    return bool(str(fz.get("why") or "").strip().lower().startswith("counted sweep")
+                or re.search(r"-(?:sweep|counted(?:-[0-9A-Z]+)?)$", str(fz.get("by") or ""), re.I))
+
+
+def cmd_freeze(a, d, now):
+    """freeze on | off | show: the main checkout held still for a counted run. on and off are the manager's, and
+    each is a punch in the time clock; show is anyone's and writes nothing."""
+    f = d / FREEZE_FILE
+    fz = freeze_facts(d, now)
+    if a.action == "show":
+        if getattr(a, "json", False):
+            print(json.dumps(fz, indent=1, ensure_ascii=False))
+        elif fz["on"]:
+            print(f"FREEZE {freeze_text(fz, now)}")
+            print("  change nothing in the main checkout, tracked or untracked, until the manager lifts it: "
+                  f"{tool()} freeze off --by \"<the manager's line>\"")
+        else:
+            print(f"no freeze: the main checkout is open ({f.as_posix()} is absent)")
+        return 0
+    if not a.by:
+        raise Refused(f"freeze {a.action} is the manager's: give --by \"<the manager's line>\"")
+    key = load_key(d)
+    if a.action == "on":
+        why = (a.why or "").strip()
+        if not why:
+            raise Refused("freeze on needs --why: the run it covers, in a few words (\"counted run of G1\")")
+        max_s = parse_dur(a.max, unit=True) if a.max else None
+        with locked(d):
+            roster = read_roster(d)
+            mgr = manager_of(d, key, roster, a.by, crew(d, now))
+            if fz["on"]:
+                raise Refused(f"a freeze is already on ({freeze_text(fz, now)}). Lift it first (freeze off), then set "
+                              "the new one")
+            body = {"by": mgr["id"], "why": why, "lane": a.lane or None, "at": now, "max_s": max_s}
+            f.write_text(json.dumps(body, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+            append_event(d, {"at": now, "id": mgr["id"], "ev": "freeze", "on": True, "why": why,
+                             **({"lane": a.lane} if a.lane else {}), **({"max_s": max_s} if max_s is not None else {})})
+        print(f"FREEZE on {freeze_text(freeze_facts(d, now), now)}")
+        print("  the roster and every `me` say FREEZE from now; tell the crew on the clock (one message each) to "
+              "commit only in their own worktrees")
+        print(f"  lift it when the run's records are committed: {tool()} freeze off --by \"<your line>\"")
+        return 0
+    with locked(d):
+        roster = read_roster(d)
+        mgr = manager_of(d, key, roster, a.by, crew(d, now))
+        if not fz["on"]:
+            print("no freeze is on: nothing to lift, nothing written")
+            return 0
+        if freeze_is_sweeps(fz) and not getattr(a, "force", False):
+            raise Refused(f"this freeze is a counted sweep's ({freeze_text(fz, now)}), and the sweep may still be "
+                          f"running: see it with `{tool('sweep.py')} status`. A sweep lifts its own freeze at its end; "
+                          "lifting it under a running sweep lets a commit into the checkout it measures. If the sweep "
+                          "is dead, lift it with: freeze off --force")
+        f.unlink(missing_ok=True)
+        append_event(d, {"at": now, "id": mgr["id"], "ev": "freeze", "on": False, "was_by": fz["by"],
+                         **({"held_s": int(now - fz["at"])} if fz.get("at") is not None else {}),
+                         **({"note": a.note} if a.note else {})})
+    held = f" after {ago(now - fz['at'])}" if fz.get("at") is not None else ""
+    print(f"freeze lifted by {mgr['id']}{held} (it was set by {fz['by']}: {fz['why']}); the main checkout is open")
+    return 0
+
+
+def safe_state():
+    """(state, what is missing): the state file as a dict, or {} and one sentence when it is absent or unreadable."""
+    f = state_file()
+    if not f.exists():
+        return {}, (f"no state file ({f.as_posix()}): the shift, usage, decisions, blockers and failures were not "
+                    f"read; `{tool('board.py')} init` writes one")
+    try:
+        s = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        return {}, f"the state file cannot be read ({f.as_posix()}: {type(e).__name__}): nothing in it was checked"
+    if not isinstance(s, dict):
+        return {}, f"the state file is not an object ({f.as_posix()}): nothing in it was checked"
+    return s, None
+
+
+def _num(v):
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v else None
+
+
+def _when(v):
+    """A usage point's `at` (an ISO time, or epoch seconds) as epoch seconds, or None."""
+    if _num(v) is not None:
+        return float(v)
+    try:
+        t = dt.datetime.fromisoformat(str(v).strip().replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return (t if t.tzinfo else t.astimezone()).timestamp()
+
+
+USAGE_FRESH_S = 4 * 3600  # the round asks for a new usage point when the last is older than this
+
+
+def usage_facts(state, now):
+    """{"stop", "last" (percent or None), "at" (epoch or None), "over", "old"} from state.usage: the last point
+    against the stop the state records, else the profile's limits.usage_stop."""
+    u = state.get("usage") if isinstance(state.get("usage"), dict) else {}
+    stop = _num(u.get("stop"))
+    if stop is None:
+        stop = _num(prof().get("limits.usage_stop", 80))
+    pts = []
+    for p in u.get("points") or []:
+        at, w = (_when(p.get("at")), _num(p.get("weekly"))) if isinstance(p, dict) else (None, None)
+        if at is not None and w is not None:
+            pts.append((at, w))
+    at, last = pts[-1] if pts else (None, None)
+    return {"stop": stop, "last": last, "at": at, "over": bool(last is not None and stop is not None and last >= stop),
+            "old": bool(at is None or now - at > USAGE_FRESH_S)}
+
+
+def usage_text(u, now):
+    stop = _num(u.get("stop"))
+    stop = "the stop is not a number" if stop is None else f"the stop is {stop:g}%"
+    if _num(u.get("last")) is None:
+        return f"no usage point recorded; {stop}"
+    return f"{u['last']:g}% at {hhmm(u['at'], now)} ({ago(now - u['at'])} ago); {stop}"
+
+
+def open_decisions(state):
+    return [x for x in state.get("decisions") or [] if isinstance(x, dict) and x.get("status", "open") == "open"]
+
+
+def user_blockers(state):
+    """The blockers the user must clear: the owner names the user as a word, or there is no owner and the text
+    says it waits on the user."""
+    out = []
+    for b in state.get("blockers") or []:
+        if not isinstance(b, dict):
+            continue
+        owner = b.get("owner")
+        if (re.search(r"(?<![\w-])user(?![\w-])", str(owner), re.I) if owner else
+                re.search(r"(?<![\w-])the user(?![\w-])", str(b.get("what") or ""), re.I)):
+            out.append(b)
+    return out
+
+
+def unfiled_reports(state, reports):
+    """The crew's failure reports (R<seq>) that no state.failures entry names in its `from`."""
+    filed = set()
+    for f in state.get("failures") or []:
+        fr = f.get("from") if isinstance(f, dict) else None
+        filed.update(str(x) for x in (fr if isinstance(fr, list) else [fr] if fr else []))
+    return [r for r in reports if f"R{r['seq']}" not in filed]
+
+
+def open_failures(state):
+    return [f for f in state.get("failures") or [] if isinstance(f, dict) and f.get("status", "open") in ("open", "planned")]
+
+
+def new_handins(d):
+    """(the hand-in files not yet marked seen, every file's stamp): a file is new until a round with --by lists it,
+    and new again when a later handin rewrites it."""
+    try:
+        seen = json.loads((d / SEEN_FILE).read_text(encoding="utf-8")).get("seen", {})
+    except (OSError, ValueError, AttributeError):
+        seen = {}
+    seen = seen if isinstance(seen, dict) else {}
+    new, stamps = [], {}
+    folder = d / "handins"
+    for f in sorted(folder.glob("*.md")) if folder.is_dir() else []:
+        if "." in f.stem:  # <id>.<n>.md is an earlier hand-in kept beside the live <id>.md: not a new one
+            continue
+        try:
+            stamp = round(f.stat().st_mtime, 3)
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                head = fh.readline().strip().lstrip("# ").strip()
+        except OSError:
+            continue
+        stamps[f.name] = stamp
+        if seen.get(f.name) != stamp:
+            new.append({"file": f.name, "path": f.as_posix(), "at": stamp, "head": head})
+    return new, stamps
+
+
+def journal_standing(d, state, now):
+    """(journal.py's facts, None), or (None, why) when the journal cannot be read: never an exception."""
+    try:
+        import journal
+        return journal.facts(d, state, now), None
+    except Exception as e:  # the journal never breaks a round or a hand-off
+        return None, f"the shift journal could not be read ({type(e).__name__}: {e})"
+
+
+def round_facts(d, state, missing, now):
+    """What needs the manager, most pressing first, as {"needs": [{"kind", "act", "text"}], "notes", "crew",
+    "seats", "first", "handins"}. `act` False marks a line that is there to be known, not acted on (a counted run or
+    a freeze going as it should)."""
+    c = crew(d, now)
+    needs, notes = [], ([missing] if missing else [])
+    cmd, board = tool(), tool("board.py")
+
+    def need(kind, text, act=True):
+        needs.append({"kind": kind, "act": act, "text": text})
+
+    # (a) usage
+    u = usage_facts(state, now)
+    if u["over"]:
+        need("usage", f"usage {u['last']:g}% is at or past the stop at {u['stop']:g}%: start no new work, and ask the "
+                      "user whether to go on")
+    if u["old"] and not missing:
+        last = f"the last is {u['last']:g}% at {hhmm(u['at'], now)}" if u["last"] is not None else "none is recorded"
+        need("usage", f"no usage point in the last {USAGE_FRESH_S // 3600} hours ({last}): read the plan's weekly usage "
+                      f"and record it, `{board} usage <percent>`")
+    # (b) what waits on the user
+    for x in open_decisions(state):
+        before = f" (needed before {x['needed_before']})" if x.get("needed_before") else ""
+        need("decision", f"{x.get('id', '?')} waits on the user{before}: {str(x.get('question', ''))[:160]}: ask the user, "
+                         "in the open, with the options")
+    for b in user_blockers(state):
+        need("blocker", f"a blocker waits on the user: {str(b.get('what', ''))[:160]}: ask the user")
+    # (c) a counted run or a freeze
+    rq = rq_facts(d, now)
+    for s in sweeps_of(rq, now):
+        if s["dead"]:
+            need("counted", f"the counted run {s['id']} looks dead (its hold on {res_name()} is past its limit, since "
+                            f"{hhmm(s['since'], now)}): check the session that started it, then free the seat with "
+                            f"`{tool('rq.py')} force-release`")
+        else:
+            need("counted", f"the counted run {s['id']} is in the queue of {res_name()}: change nothing in the main "
+                            "checkout until it ends and its records are committed", act=False)
+    for bid in unmarked_counted(rq):
+        need("counted", f"{bid} holds or waits for the whole of {res_name()} under a plain id: if it is a counted run, "
+                        f"freeze the main checkout (`{cmd} freeze on`) until it ends")
+    fz = c["freeze"]
+    if fz["on"] and fz["stale"]:
+        need("freeze", f"the freeze {freeze_text(fz, now)}: check the run it covers; when its records are committed, "
+                       f"`{cmd} freeze off`")
+    elif fz["on"]:
+        need("freeze", f"a freeze is in force {freeze_text(fz, now)}: change nothing in the main checkout; lift it when "
+                       f"the run's records are committed (`{cmd} freeze off`)", act=False)
+    # (d) failure reports not filed
+    for r in unfiled_reports(state, c["reports"]) if not missing else []:
+        where = " ".join(str(r[k]) for k in ("lane", "verdict") if r.get(k))
+        need("report", f"R{r['seq']} from {r['id']} is not filed ({(where + ': ') if where else ''}"
+                       f"{str(r.get('what', ''))[:120]}): file it, `{board} fail --from R{r['seq']} --what \"...\"`")
+    if missing and c["reports"]:
+        notes.append(f"{len(c['reports'])} failure report(s) in the time clock could not be checked against the state's failures")
+    # (e) new hand-ins
+    new, stamps = new_handins(d)
+    for h in new:
+        need("handin", f"a new hand-in, {h['file']} ({h['head'] or 'no heading'}; written {hhmm(h['at'], now)}): read it "
+                       f"({h['path']}), then merge its commits or send it back")
+    # (f) the crew
+    for b in c["badges"]:
+        if b["role"] in TOP:
+            continue
+        who = f"{b['id']} {b['name']} ({title_text(b)})"
+        sess = f"session {b['session']}" if b.get("session") else "no session recorded"
+        if b["status"] in ("STALE", "OVERDUE"):
+            need("crew", f"{who} is {b.get('status_text') or b['status']}, last heard {hhmm(b['heard'], now)} ({sess}): "
+                         "look at its session, then message it or clock it out as lost")
+        if b["kind"] == "SESSION" and not b.get("session") and b["status"] in ("HIRED", "UP", "STALE", "OVERDUE"):
+            need("crew", f"{who} is a session badge with no session: start or re-badge a bench and record it, "
+                         f"`{cmd} assign {b['id']} --session local_...`, or clock it out")
+    # (g) the journal's plan
+    jf, why = journal_standing(d, state, now)
+    if why:
+        notes.append(why)
+    elif jf["state"] == "DUE":
+        need("journal", f"the shift journal's plan is due (since {hhmm(jf['due'], now)}; {len(jf['unplanned'])} with no "
+                        f"plan, {len(jf['pending'])} awaiting approval): `{tool('journal.py')} ready`, then ask the user "
+                        "to approve it")
+    elif jf["state"] == "READY":
+        need("journal", f"the shift journal's plan waits for the user's approval ({len(jf['pending'])} entries"
+                        f"{', ' + str(jf['file']) if jf.get('file') else ''}): ask the user, then record the words with "
+                        f"`{tool('journal.py')} approve`")
+    rows = []
+    for b in headcount(c):
+        eta = f"finish ~{hhmm(b['eta'], now)}" if b.get("eta") else "no estimate"
+        rows.append({"id": b["id"], "name": b["name"], "title": title_of(b), "role": b["role"], "kind": b["kind"],
+                     "status": b["status"], "pct": b["pct"], "eta": b.get("eta"), "heard": b.get("heard"),
+                     "session": b.get("session"),
+                     "text": f"{b['id']} {b['name']} {title_text(b)} {b['kind'].lower()}: "
+                             f"{b.get('status_text') or b['status']} {b['pct']}% {eta}; heard {hhmm(b['heard'], now)}"
+                             + (f"; {res_name()}: {b['vm']}" if b.get("vm") else "")
+                             + f"; {b.get('session') or 'no session'}"})
+    seats = []
+    if has_resource():
+        held = {h["lane"]: h for h in rq["holds"]}
+        for s in rq["seats"]:
+            h = held.get(s)
+            seats.append({"seat": s, "id": h["id"] if h else None, "overdue": bool(h and h["overdue"]),
+                          "text": (f"seat {s}: {h['id']} since {hhmm(h['since'], now)} ({int((now - h['since']) // 60)} of "
+                                   f"{int(h['max'] // 60)} min{', OVERDUE' if h['overdue'] else ''}): {h['job']}") if h
+                                  else f"seat {s}: free"})
+        if rq["queue"]:
+            seats.append({"seat": None, "id": None, "overdue": False,
+                          "text": f"waiting ({len(rq['queue'])}): " + ", ".join(e["id"] for e in rq["queue"])})
+    acts = [n for n in needs if n["act"]]
+    first = acts[0]["text"] if acts else "nothing needs you; end the turn"
+    return {"at": now, "office": d.as_posix(), "manager": c.get("manager"), "needs": needs, "notes": notes,
+            "crew": rows, "seats": seats, "usage": u, "freeze": fz, "first": first,
+            "handins": [h["file"] for h in new], "_stamps": stamps, "_crew": c}
+
+
+def cmd_round(a, d, now):
+    """The manager's wake-up in one command: what needs the manager, most pressing first, then the crew and the
+    seats, then the first thing to do. Without --by it writes nothing; with --by it also posts the manager's
+    heartbeat and marks the listed hand-ins seen."""
+    state, missing = safe_state()
+    mgr = None
+    if a.by:  # checked before anything is printed, so a wrong line writes and prints nothing
+        mgr = manager_of(d, load_key(d), read_roster(d), a.by, crew(d, now))
+    r = round_facts(d, state, missing, now)
+    stamps, c = r.pop("_stamps"), r.pop("_crew")
+    wrote = None
+    if mgr:
+        me = next(b for b in c["badges"] if b["id"] == mgr["id"])
+        acts = sum(1 for n in r["needs"] if n["act"])
+        with locked(d):
+            append_event(d, {"at": now, "id": mgr["id"], "ev": "progress", "pct": me["pct"],
+                             "note": f"round: {acts} to act on" if acts else "round: nothing to act on"})
+            if r["handins"]:
+                try:
+                    seen = json.loads((d / SEEN_FILE).read_text(encoding="utf-8")).get("seen", {})
+                except (OSError, ValueError, AttributeError):
+                    seen = {}
+                seen = {k: v for k, v in (seen if isinstance(seen, dict) else {}).items() if k in stamps}
+                seen.update({name: stamps[name] for name in r["handins"]})
+                (d / SEEN_FILE).write_text(json.dumps({"seen": seen, "at": now, "by": mgr["id"]}, indent=1) + "\n",
+                                           encoding="utf-8", newline="\n")
+        wrote = {"heartbeat": mgr["id"], "handins_seen": r["handins"]}
+    r["by"], r["wrote"] = (mgr["id"] if mgr else None), wrote
+    if a.json:
+        print(json.dumps(r, indent=1, ensure_ascii=False))
+        return 0
+    print(f"Round at {local(now):%Y-%m-%d %H:%M} ({d.as_posix()}); manager {r['manager'] or 'none appointed'}")
+    print(f"  needs you ({len(r['needs'])}):" if r["needs"] else "  needs you: nothing")
+    for i, n in enumerate(r["needs"], 1):
+        print(f"    {i}. [{n['kind']}] {n['text']}" + ("" if n["act"] else "  (to know, nothing to do)"))
+    for n in r["notes"]:
+        print(f"  note: {n}")
+    print(f"  usage: {usage_text(r['usage'], now)}")
+    print(f"  crew ({len(r['crew'])}):" if r["crew"] else "  crew: nobody hired or on the clock")
+    for b in r["crew"]:
+        print(f"    {b['text']}")
+    if r["seats"]:
+        print(f"  {res_name()}:")
+        for s in r["seats"]:
+            print(f"    {s['text']}")
+    if wrote:
+        print(f"  posted {mgr['id']}'s heartbeat" + (f"; marked seen: {', '.join(r['handins'])}" if r["handins"] else ""))
+    else:
+        print(f"  nothing written (no --by): `{tool()} round --by \"<your line>\"` posts your heartbeat and marks the "
+              "hand-ins seen")
+    print(f"first: {r['first']}")
+    return 0
+
+
+def free_path(p):
+    """`p` when no file is there, else the first of <stem>-2, <stem>-3, ... that is free: nothing is overwritten."""
+    if not p.exists():
+        return p
+    n = 2
+    while p.with_name(f"{p.stem}-{n}{p.suffix}").exists():
+        n += 1
+    return p.with_name(f"{p.stem}-{n}{p.suffix}")
+
+
+def cmd_handoff(a, d, now):
+    """Write the next manager's hand-off brief as Markdown: what the office and the state know, and three sections
+    the manager fills by hand. Never overwrites: a second call writes <name>-2."""
+    state, missing = safe_state()
+    key = load_key(d)
+    c = crew(d, now)
+    mgr = manager_of(d, key, read_roster(d), a.by, c)
+    slots = (state.get("rota") or {}).get("slots") if isinstance(state.get("rota"), dict) else None
+    slot = mgr.get("slot") or slot_at(slots, now)[0]
+    if a.out:
+        out = Path(a.out).expanduser()
+        out = out if out.is_absolute() else Path.cwd() / out
+        if not out.parent.is_dir():
+            raise Refused(f"--out {a.out}: its folder does not exist")
+    else:
+        out = d / "briefs" / f"handoff-{token(slot, 12).lower()}-{local(now):%Y%m%d}.md"
+    fill = lambda what: [f"_Fill by hand: {what}_", "", "- "]
+    L = [f"# Hand-off brief: {slot} slot, {local(now):%Y-%m-%d %H:%M}",
+         "",
+         f"Written by {mgr['id']} {mgr['name']} with `office.py handoff` for the next manager. The office and the state "
+         "filled what they know; the three sections at the end are the manager's to write.",
+         ""]
+    if missing:
+        L += [f"**Missing:** {missing}", ""]
+    L += ["## Now", ""]
+    nw = state.get("now") if isinstance(state.get("now"), dict) else {}
+    shown = [(k, str(nw.get(k) or "").strip()) for k in ("headline", "position", "tree", "plan_file")]
+    L += [f"- {k.replace('_', ' ')}: {v}" for k, v in shown if v] or ["- (the state has no `now`)"]
+    sh = state.get("shift") if isinstance(state.get("shift"), dict) else {}
+    L += ["", f"## Shift {sh.get('id', 'none')} (crew_max {sh.get('crew_max', 'not set')})", ""]
+    blocks = [b for b in sh.get("blocks") or [] if isinstance(b, dict)]
+    for b in blocks:
+        L.append(" ".join(str(x) for x in ("-", f"[{b.get('status') or 'pending'}]", b.get("time"),
+                                           b.get("title") or "(no title)") if x)
+                 + (f" (checkpoint {b['checkpoint']})" if b.get("checkpoint") else "")
+                 + (f"; done when: {b['done_when']}" if b.get("done_when") else ""))
+    if not blocks:
+        L.append("- (the shift has no blocks)")
+    on = [b for b in c["badges"] if b["on"]]
+    L += ["", f"## On the clock ({len(on)})", ""]
+    for b in on:
+        eta = hhmm(b["eta"], now) if b.get("eta") and b["role"] != "FOUNDER" else "none"
+        L.append(f"- {b['id']} {b['name']}, {title_text(b)}, {b['kind'].lower()}, session {b.get('session') or 'not recorded'}: "
+                 f"{b.get('job') or '(no job text)'}; {b['pct']}%, finish ~{eta}; {b.get('status_text') or b['status']}")
+    if not on:
+        L.append("- nobody")
+    hired = [b for b in c["badges"] if b["status"] == "HIRED" and b["role"] not in TOP]
+    if hired:
+        L.append("- hired, not clocked in: " + ", ".join(f"{b['id']} {b['name']} ({title_text(b)})" for b in hired))
+    L += ["", "Benches: ", "", "_Fill by hand: each bench session, its title as it reads now, and whether it is cleared._"]
+    fails = open_failures(state)
+    L += ["", f"## Open failures ({len(fails)})", ""]
+    L += [f"- {f.get('id', '?')} {f.get('status', 'open')}, owner {f.get('owner') or 'none'}: {str(f.get('what', ''))[:200]}"
+          for f in fails] or ["- none" if not missing else "- not read (no state)"]
+    unfiled = unfiled_reports(state, c["reports"]) if not missing else []
+    if unfiled:
+        L.append("- reports not filed yet: " + ", ".join(f"R{r['seq']}" for r in unfiled))
+    decs = open_decisions(state)
+    L += ["", f"## Open decisions ({len(decs)})", ""]
+    L += [f"- {x.get('id', '?')}" + (f" (needed before {x['needed_before']})" if x.get("needed_before") else "")
+          + f": {str(x.get('question', ''))[:200]}" for x in decs] or ["- none" if not missing else "- not read (no state)"]
+    L += ["", "## Freeze and counted runs", ""]
+    fz = c["freeze"]
+    frozen = [f"- FREEZE {freeze_text(fz, now)}"] if fz["on"] else []
+    frozen += [f"- counted run in the queue of {res_name()}: {t}" for t in c["vm"]["sweeps"]]
+    frozen += [f"- {bid} holds or waits for the whole of {res_name()} under a plain id: a counted run?" for bid in c["vm"].get("unmarked") or []]
+    L += frozen or ["- none in force: the main checkout is open"]
+    if frozen:
+        L.append("- the session that started a counted run keeps it as a background job: do not stop or archive that "
+                 "session, and change nothing in the main checkout until the run ends")
+    L += ["", "## Journal", ""]
+    try:
+        import journal
+        line = journal.end_shift_line(d, state, now) or "the shift journal's plan is approved: nothing waits"
+    except Exception as e:  # the journal never breaks a hand-off
+        line = f"the shift journal could not be read ({type(e).__name__}: {e})"
+    L.append(f"- {line}")
+    L += ["", "## Usage", "", f"- {usage_text(usage_facts(state, now), now)}" if not missing else "- not read (no state)"]
+    L += ["", "## The user's words this slot (quoted, with the time)", ""]
+    L += fill("every instruction, approval or refusal the user gave this slot, word for word, each with its time; the "
+              "next manager acts on these and on nothing remembered")
+    L += ["", "## Promised to the crew", ""]
+    L += fill("what you told an employee it would get or when (a review, a merge, a seat, an answer), by badge id, so "
+              "the next manager keeps it")
+    L += ["", "## Background jobs this session started", ""]
+    L += fill("each job still running in this session (a queued run, a watcher), what ends it, and that this session "
+              "must not be stopped or archived until it has")
+    with locked(d):
+        out = free_path(out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("\n".join(L) + "\n", encoding="utf-8", newline="\n")
+        append_event(d, {"at": now, "id": mgr["id"], "ev": "handoff", "file": out.as_posix()})
+    print(out.as_posix())
+    print(f"hand-off brief for the {slot} slot written by {mgr['id']}; fill its three hand-written sections and the "
+          "benches line before the next manager reads it")
+    if missing:
+        print(f"  note: {missing}")
+    return 0
+
+
+def timer_slots(state):
+    """The rota's slots in clock order, each with its end (the next slot's start): state.json's, else the profile's."""
+    rota = state.get("rota") if isinstance(state.get("rota"), dict) else {}
+    slots = [s for s in (rota.get("slots") or default_slots())
+             if isinstance(s, dict) and re.fullmatch(r"\d{2}:\d{2}", str(s.get("start", ""))) and s.get("id")]
+    slots = sorted(slots or _SLOTS, key=lambda s: s["start"])
+    return [{"id": str(s["id"]), "start": s["start"], "end": slots[(i + 1) % len(slots)]["start"]}
+            for i, s in enumerate(slots)]
+
+
+HANDOFF_LEAD_MIN = 40  # the hand-off timer fires this long before a slot's end
+
+
+def timers_doc(state):
+    skill = prof().skill("manager")
+    out = [{"name": "round", "recurring": True, "every": str(prof().get("slots.round_every", "2h") or "2h"),
+            "prompt": f"/{skill} status, then the round"}]
+    for s in timer_slots(state):
+        h, m = map(int, s["end"].split(":"))
+        t = (h * 60 + m - HANDOFF_LEAD_MIN) % (24 * 60)
+        out.append({"name": f"handoff-{s['id']}", "recurring": True, "at": f"{t // 60:02d}:{t % 60:02d}",
+                    "prompt": f"/{skill} shift-change"})
+        out.append({"name": f"start-{s['id']}", "recurring": True, "at": s["start"], "prompt": f"/{skill} start"})
+    return {"timers": out}
+
+
+def timers_problems(doc):
+    """What is wrong with a manager-timers.json, one sentence per bad entry; [] when its shape is right."""
+    if not isinstance(doc, dict) or not isinstance(doc.get("timers"), list):
+        return ["the file is not {\"timers\": [...]}"]
+    bad = []
+    for i, t in enumerate(doc["timers"], 1):
+        if not isinstance(t, dict):
+            bad.append(f"entry {i}: not an object")
+            continue
+        why = []
+        if not isinstance(t.get("name"), str) or not t["name"].strip():
+            why.append("no name")
+        if not isinstance(t.get("recurring"), bool):
+            why.append("recurring is not true or false")
+        every, at = t.get("every"), t.get("at")
+        if every is None and at is None:
+            why.append("neither every nor at")
+        if every is not None:
+            try:
+                if parse_dur(every) <= 0:
+                    raise Refused("zero")
+            except Refused:
+                why.append(f"every {every!r} is not a duration (2h, 90m)")
+        if at is not None:
+            m = re.fullmatch(r"(\d{2}):(\d{2})", str(at))
+            if not m or int(m.group(1)) > 23 or int(m.group(2)) > 59:
+                why.append(f"at {at!r} is not a clock time (HH:MM)")
+        if not isinstance(t.get("prompt"), str) or not t["prompt"].strip():
+            why.append("no prompt")
+        if why:
+            bad.append(f"entry {i} ({t.get('name') if isinstance(t.get('name'), str) and t['name'].strip() else 'unnamed'}): "
+                       + ", ".join(why))
+    return bad
+
+
+def cmd_timers(a, d, now):
+    """timers init | show: the list of the manager's timers, as a file. The tool creates no timer itself."""
+    f = d / TIMERS_FILE
+    said = "this tool creates no timer: the manager creates them in its session: this file is the list"
+    if a.action == "init":
+        if not a.by:
+            raise Refused("timers init is the manager's: give --by \"<the manager's line>\"")
+        state, missing = safe_state()
+        with locked(d):
+            mgr = manager_of(d, load_key(d), read_roster(d), a.by, crew(d, now))
+            if f.exists():
+                print(f"{f.as_posix()} is already there: nothing written (`{tool()} timers show` prints and checks it; "
+                      "edit it by hand, or remove it and run init again)")
+                return 0
+            doc = timers_doc(state)
+            f.write_text(json.dumps(doc, indent=1, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
+            append_event(d, {"at": now, "id": mgr["id"], "ev": "timers", "file": f.as_posix(), "n": len(doc["timers"])})
+        rota = state.get("rota") if isinstance(state.get("rota"), dict) else {}
+        print(f"wrote {f.as_posix()}: {len(doc['timers'])} timers from the rota's slots ("
+              + ("the state's" if rota.get("slots") else "the profile's: there is no state file" if missing
+                 else "the profile's: the state names none") + ")")
+        for t in doc["timers"]:
+            print(f"    {t['name']}: {'every ' + t['every'] if t.get('every') else 'at ' + t['at']}, "
+                  f"{'recurring' if t['recurring'] else 'once'}: {t['prompt']}")
+        print(said)
+        return 0
+    if not f.exists():
+        print(f"no {TIMERS_FILE} in the office ({f.as_posix()}): `{tool()} timers init --by \"<the manager's line>\"` "
+              "writes it")
+        return 1
+    try:
+        doc = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        print(f"{f.as_posix()} cannot be read ({type(e).__name__}: {e})")
+        return 1
+    bad = timers_problems(doc)
+    print(f"{f.as_posix()}:")
+    for t in (doc.get("timers") if isinstance(doc, dict) and isinstance(doc.get("timers"), list) else []):
+        if isinstance(t, dict):
+            when = f"every {t['every']}" if t.get("every") is not None else f"at {t.get('at')}"
+            print(f"    {t.get('name')}: {when}, {'recurring' if t.get('recurring') is True else 'once'}: {t.get('prompt')}")
+    for b in bad:
+        print(f"  BAD {b}")
+    print("  each entry needs: name, recurring (true or false), every (a duration) or at (HH:MM), prompt" if bad else
+          f"  {len(doc['timers'])} timers, the shape is right")
+    print(said)
+    return 1 if bad else 0
+
+
 def cmd_verify(a, d, now):
     rec = verify_line(load_key(d), read_roster(d), a.line)
     print(f"genuine: {rec['id']} {rec['name']} {rec['role'].lower()} {rec['kind'].lower()}, shift {rec['shift']}, issued {hhmm(rec['issued'], now)}")
@@ -2367,7 +3443,8 @@ def cmd_badge(a, d, now):
     rec = read_roster(d)["badges"].get(a.id)
     if not rec:
         raise Refused(f"no badge {a.id}")
-    print(plate(d, rec).as_posix())
+    out = plate(d, rec)
+    print(out.as_posix() if out else "no plate drawn: segno is not installed (`pip install segno`); the line below is the badge")
     print(rec["line"])
     return 0
 
@@ -2874,8 +3951,9 @@ def _selftest(tmp):
     rc, out = run("roster", at=4420, **nr)
     rc2, out2 = run("me", "--badge", b1, at=4420, **nr)
     expect("with no [resource] name the roster and me print no queue line, hold or freeze",
-           rc == 0 and rc2 == 0 and all(x not in out + out2 for x in ("seat main", "waiting 1.", "COUNTED", "FREEZE",
-                                                                     "queued job", "counted run in the queue", "rq.py", "--waiting-on")),
+           rc == 0 and rc2 == 0 and all(x not in out + out2 for x in ("seat main", "waiting 1.", "COUNTED", "FREEZE:", "FREEZE by",
+                                                                     "queued job", "counted run in the queue", "rq.py", "--waiting-on"))
+           and "you see it as FREEZE in `" in out2,  # the brief's own sentence is the one place the word stays
            out + out2)
     os.environ.update(nr)
     c_nr = crew(d, T2)
@@ -3632,7 +4710,7 @@ def _selftest(tmp):
     f1 = badge_of(out) if rc == 0 else ""
     expect("found mints the one founder badge, FDR-1, with the profile's prefix and ROLE:FOUNDER",
            rc == 0 and f1.startswith(f"{PRE} ID:FDR-1 ") and "ROLE:FOUNDER" in f1
-           and read_roster(df).get("founder") == "FDR-1" and (df / "badges" / "FDR-1.svg").is_file(), out)
+           and read_roster(df).get("founder") == "FDR-1" and ((df / "badges" / "FDR-1.svg").is_file() or not HAVE_SEGNO), out)
     rc, out = run_f("verify", f1, at=11)
     expect("a founder's line verifies", rc == 0 and "genuine: FDR-1 founder-a founder" in out, out)
     rc, out = run_f("found", "--name", "founder-b", at=12)
@@ -3708,6 +4786,525 @@ def _selftest(tmp):
     expect("the founder clocks out", rc == 0 and "FDR-3 founder-c clocked out" in out, out)
     rc, out = run_f("roster", at=130)
     expect("a founder off the clock still has its roster line, as OUT", "  founder FDR-3 founder-c: OUT" in out, out)
+
+    # titles, models, the push rule, the freeze, the round, the hand-off brief and the timers, in an office of
+    # their own: a profile with [titles], [models], [flagged] and git.push, and a state with usage, decisions,
+    # blockers and a failure
+    dT = tmp / "office-titles"
+    iso = lambda ts: dt.datetime.fromtimestamp(ts, dt.timezone.utc).isoformat()
+    state_t = {"shift": {"id": "t-shift", "crew_max": 12,
+                         "blocks": [{"time": "10:00", "title": "build M1", "status": "done", "checkpoint": "C1"},
+                                    {"title": "grade G1", "status": "pending", "done_when": "G1 says PASS"}]},
+               "rota": {"slots": DEFAULT_SLOTS}, "now": {"headline": "M1 is being built", "tree": "abc1234"},
+               "usage": {"stop": 80, "points": [{"at": iso(t0 - 5 * 3600), "weekly": 40}]},
+               "decisions": [{"id": "D1", "question": "how many seats", "status": "open"},
+                             {"id": "D2", "question": "settled", "status": "decided"}],
+               "blockers": [{"what": "the signing key", "owner": "the user"}, {"what": "a slow test", "owner": "EMP-01"}],
+               "failures": [{"id": "F1", "what": "G1 VOID on the harness", "status": "open", "owner": "EMP-01", "from": "R999"},
+                            {"id": "F2", "what": "old", "status": "fixed"}]}
+    (tmp / "state-titles.json").write_text(json.dumps(state_t), encoding="utf-8")
+    put(tmp, "titles.toml", prof_head + resource + "[git]\npush = true\n[models]\nscout = \"model-s\"\nfixer = \"model-f\"\n"
+        "[flagged.fixer]\nmodel = \"model-flag\"\ntrailer = \"Built-by: model-flag\"\n"
+        "[titles.auditor]\nlike = \"reviewer\"\nkinds = [\"session\"]\ndoes = \"audits the release notes\"\n"
+        "[titles.broken]\nlike = \"nobody\"\n")
+
+    def run_t(*args, at, profile="titles.toml", state_name="state-titles.json", cwd=tmp, base=None):
+        e = {**(base or env), "FOUNDRY_PATHS_OFFICE": str(dT), "FOUNDRY_NOW": str(t0 + at),
+             "FOUNDRY_PATHS_STATE": str(tmp / state_name)}
+        if profile:
+            e["FOUNDRY_PROFILE"] = str(tmp / profile)
+        r = subprocess.run([sys.executable, __file__, *args], capture_output=True, text=True, encoding="utf-8",
+                           timeout=120, cwd=cwd, env=e)
+        return r.returncode, r.stdout + r.stderr
+
+    def hire_t(name, *more, at, kind="temp", **kw):
+        return run_t("hire", "--by", mT, "--name", name, "--kind", kind, "--job", f"the job of {name}", "--eta", "30m",
+                     *more, at=at, **kw)
+
+    rc, out = run_t("found", "--name", "fdr-t", at=1)
+    fT = badge_of(out) if rc == 0 else ""
+    rc, out = run_t("appoint", "--name", "mgr-t", "--session", "local_mgr-t", at=2)
+    mT = badge_of(out) if rc == 0 else ""
+    run_t("clock-in", "--badge", mT, at=3)
+    rosterT = lambda: read_roster(dT)["badges"]
+
+    rc, out = hire_t("fix-1", "--title", "fixer", "--files", "src/app/**", at=10)
+    fx = badge_of(out) if rc == 0 else ""
+    rec_fx = rosterT().get("TMP-01", {})
+    expect("hire --title fixer sets the role BUILDER, keeps the title on the roster and prints it",
+           rc == 0 and "ROLE:BUILDER" in fx and rec_fx.get("title") == "fixer" and rec_fx.get("role") == "BUILDER"
+           and "hired TMP-01 fix-1 (fixer (builder), temp)" in out, out)
+    expect("the brief prints the title's card: its role, kinds, what it does, may write and hands in",
+           "Your card (fixer): role builder; hired as session or temp" in out and "    Does: fixes one filed failure" in out
+           and "    May write: the files its badge owns" in out and "    Hands in: its commits, the failure's id" in out
+           and "TMP-01 (fix-1, fixer (builder))" in out, out)
+    expect("a flagged title's brief names the model of [flagged], not of [models], and the trailer every commit ends with",
+           "Model: model-flag (the manager sets the session to it; say in your first progress note which model you run on)" in out
+           and "Model: model-f (" not in out
+           and "Every commit of yours ends with the trailer: Built-by: model-flag. Your commits get an in-depth review." in out
+           and "  model: model-flag ([flagged.fixer])" in out, out)
+    expect("with git.push true the brief says to push only the badge's own branch",
+           "git add -- <paths> only; push only your own branch, never the main branch)" in out and "; no push)" not in out, out)
+    rc, out = run_t("brief", "TMP-01", "--by", mT, at=11, profile=None)
+    expect("with git.push false (the default) the brief says no push, and with no [models] or [flagged] no model or trailer",
+           rc == 0 and "git add -- <paths> only; no push)" in out and "Model:" not in out and "trailer" not in out
+           and "Your card (fixer)" in out, out)
+    n_badges = len(rosterT())
+    rc, out = hire_t("x-1", "--title", "plumber", at=12)
+    expect("hire refuses an unknown title, lists the known ones (the profile's too) and mints nothing",
+           rc == 3 and "the known titles are" in out and all(t in out for t in ("auditor", "builder", "cleaner", "fixer", "grader",
+                                                                              "reviewer", "scout", "triager"))
+           and len(rosterT()) == n_badges, out)
+    rc, out = hire_t("x-2", "--title", "broken", at=13)
+    expect("hire refuses a title whose profile card is broken, and says what is wrong with it",
+           rc == 3 and "is broken" in out and "names no built-in card" in out and len(rosterT()) == n_badges, out)
+    rc, out = hire_t("x-3", "--title", "auditor", at=14)
+    rc2, out2 = hire_t("x-4", "--title", "grader", "--lane", "G1", at=14.5)
+    expect("hire refuses a kind the title's card does not allow: a profile card's session only, a grader as a temp",
+           rc == 3 and "title auditor is hired as session, not as a temp" in out and rc2 == 3 and "independent" in out2
+           and len(rosterT()) == n_badges, out + out2)
+    rc, out = hire_t("x-5", "--title", "fixer", "--role", "scout", at=15)
+    expect("--title with a --role its card does not carry is refused", rc == 3 and "is a BUILDER card" in out
+           and len(rosterT()) == n_badges, out)
+    rc, out = run_t("hire", "--by", mT, "--name", "x-6", "--kind", "temp", "--job", "j", "--eta", "30m", at=16)
+    expect("hire with neither --role nor --title is a usage error (exit 2)", rc == 2 and "--role or --title" in out, out)
+    rc, out = hire_t("aud-1", "--title", "auditor", at=17, kind="session")
+    rec_au = rosterT().get("EMP-01", {})
+    expect("a profile card built like a built-in takes its role and independence and its own text; no model is named for it",
+           rc == 0 and rec_au.get("role") == "REVIEWER" and rec_au.get("title") == "auditor"
+           and "Your card (auditor): role reviewer; hired as session; independent" in out
+           and "    Does: audits the release notes" in out and "    May write: its review file only (under docs/reviews/)" in out
+           and "Model:" not in out, out)
+    rc, out = hire_t("sc-1", "--role", "scout", at=18)
+    rec_sc = rosterT().get("TMP-02", {})
+    expect("--role alone hires on the role's own card, prints as before, and reads [models] by the role",
+           rc == 0 and rec_sc.get("title") == "scout" and "hired TMP-02 sc-1 (scout, temp)" in out
+           and "Your card (scout): role scout" in out and "(sc-1, scout), hired by" in out and "Model: model-s (" in out, out)
+    rc, out = hire_t("tri-1", "--title", "triager", at=19)
+    expect("a title [models] does not name reads the model of its role",
+           rc == 0 and rosterT().get("TMP-03", {}).get("role") == "SCOUT" and "Model: model-s (" in out
+           and "Your card (triager)" in out, out)
+    n_badges = len(rosterT())
+    rc, out = hire_t("fix-2", "--title", "fixer", "--model", "model-other", at=20)
+    expect("hiring a flagged title with another --model is refused and mints nothing",
+           rc == 3 and "is flagged" in out and "--force-model" in out and len(rosterT()) == n_badges, out)
+    rc, out = hire_t("fix-2", "--title", "fixer", "--model", "model-other", "--force-model", at=21)
+    expect("--force-model takes it: the brief names that model, the roster keeps it, and the trailer still stands",
+           rc == 0 and rosterT().get("TMP-04", {}).get("model") == "model-other" and "Model: model-other (" in out
+           and "the trailer: Built-by: model-flag." in out, out)
+    rc, out = hire_t("cl-1", "--title", "cleaner", "--model", "model-c", at=22)
+    expect("hire --model overrides [models] and is stored", rc == 0 and rosterT().get("TMP-05", {}).get("model") == "model-c"
+           and "Model: model-c (" in out and "model-s" not in out, out)
+    run_t("clock-in", "--badge", fx, at=30)
+    rc, out = run_t("roster", at=31)
+    rc2, out2 = run_t("me", "--badge", fx, at=32)
+    expect("the roster and me show the title beside the role, and me the model",
+           "    TMP-01 fix-1 fixer (builder) temp: UP" in out and "TMP-01 fix-1 (fixer (builder), temp): UP" in out2
+           and "your model: model-flag ([flagged.fixer])" in out2 and "Your card (fixer)" in out2, out + out2)
+    os.environ["FOUNDRY_PROFILE"] = str(tmp / "titles.toml")
+    cards = title_cards()
+    expect("title_cards(): seven built-in cards and the profile's over them; a badge from before titles reads as its role",
+           set(TITLE_CARDS) == {"builder", "fixer", "grader", "reviewer", "scout", "triager", "cleaner"}
+           and cards["grader"]["kinds"] == ["session"] and cards["grader"]["independent"] and cards["reviewer"]["independent"]
+           and cards["cleaner"]["role"] == "SCOUT" and cards["fixer"]["role"] == "BUILDER" and cards["auditor"]["like"] == "reviewer"
+           and "problem" in cards["broken"] and TITLE_CARDS["reviewer"]["kinds"] == ["session", "temp"]
+           and title_of({"role": "SCOUT"}) == "scout" and title_text({"role": "SCOUT"}) == "scout"
+           and model_of({"role": "SCOUT"}) == ("model-s", "[models] scout") and push_text().startswith("push only"), str(cards))
+    os.environ.pop("FOUNDRY_PROFILE")
+    expect("with no [titles], [models] or [flagged] in the profile: the built-in cards, no model, no push",
+           set(title_cards()) == set(TITLE_CARDS) and model_of({"role": "SCOUT"}) == ("", "") and flagged_of("fixer") is None
+           and push_text() == "no push", str(model_of({"role": "SCOUT"})))
+
+    # handin: a commit of a flagged-title badge without the trailer line is a PROBLEM
+    wtf = tmp / "repo-wt-flag"
+    g("worktree", "add", "-q", str(wtf), "-b", "claude/fix-f1", "main")
+    put(wtf, "src/app/core/fix.py", "B = 2\n")
+    g("add", "-A", cwd=wtf)
+    g("commit", "-q", "-m", "fix F1", cwd=wtf)
+    put(wtf, "fix-report.md", "what the fixer did\n")
+    rc, out = run_t("handin", "--badge", fx, "--file", "fix-report.md", at=40, cwd=wtf, base=henv)
+    expect("handin makes a flagged title's commit without the trailer a PROBLEM that names the trailer and the commit",
+           rc == 1 and "NOT READY" in out and "1 commit(s) lack the trailer line `Built-by: model-flag`" in out
+           and g("rev-parse", "--short=8", "HEAD", cwd=wtf) in out, out)
+    g("commit", "-q", "--amend", "-m", "fix F1\n\nwhy it broke\n\nBuilt-by: model-flag", cwd=wtf)
+    rc, out = run_t("handin", "--badge", fx, "--file", "fix-report.md", at=41, cwd=wtf, base=henv)
+    expect("with the trailer line on every commit the same hand-in is READY",
+           rc == 0 and "READY (0 problem" in out and "lack the trailer" not in out, out)
+    rc, out = run_t("handin", "--badge", fx, "--file", "fix-report.md", at=42, cwd=wtf, base=henv, profile="bare.toml")
+    expect("with no [flagged] in the profile no trailer is asked for", rc == 0 and "trailer" not in out, out)
+
+    # the freeze: the manager's, kept in the office, seen by the roster, me and freeze_facts(), with or without a queue
+    rc, out = run_t("freeze", "show", at=50)
+    expect("freeze show with no freeze says the checkout is open; freeze_facts() says off",
+           rc == 0 and "no freeze" in out and freeze_facts(dT, t0 + 50) ==
+           {"on": False, "by": None, "why": "", "lane": None, "at": None, "max_s": None, "stale": False}, out)
+    n_ev = len(read_events(dT))
+    rc, out = run_t("freeze", "on", "--by", fT, "--why", "counted run of G1", at=51)
+    rc2, out2 = run_t("freeze", "on", "--by", mT, at=52)
+    rc3, out3 = run_t("freeze", "on", "--why", "counted run of G1", at=53)
+    rc4, out4 = run_t("freeze", "off", "--by", fT, at=54)
+    expect("freeze on refuses a founder's line, a missing --why and a missing --by; off refuses a founder's line; "
+           "nothing is written",
+           rc == 3 and "founder" in out and rc2 == 3 and "--why" in out2 and rc3 == 3 and "--by" in out3 and rc4 == 3
+           and "founder" in out4 and not (dT / FREEZE_FILE).exists() and len(read_events(dT)) == n_ev, out + out2 + out3 + out4)
+    rc, out = run_t("freeze", "on", "--by", mT, "--why", "counted run of G1", "--lane", "G1", "--max", "3h", at=60)
+    fj = json.loads((dT / FREEZE_FILE).read_text(encoding="utf-8")) if (dT / FREEZE_FILE).exists() else {}
+    ev = read_events(dT)[-1]
+    expect("freeze on writes freeze.json (by, why, lane, at, max_s) and punches the time clock under the manager",
+           rc == 0 and fj == {"by": "MGR-1", "why": "counted run of G1", "lane": "G1", "at": t0 + 60, "max_s": 10800}
+           and ev["ev"] == "freeze" and ev["on"] is True and ev["id"] == "MGR-1" and "FREEZE on by MGR-1" in out, out + str(fj))
+    fz = freeze_facts(dT, t0 + 61)
+    expect("freeze_facts() reports the freeze, and stale once past at + max_s",
+           fz == {"on": True, "by": "MGR-1", "why": "counted run of G1", "lane": "G1", "at": t0 + 60, "max_s": 10800, "stale": False}
+           and freeze_facts(dT, t0 + 60 + 10801)["stale"] and not freeze_facts(dT, t0 + 60 + 10799)["stale"], str(fz))
+    rc, out = run_t("freeze", "on", "--by", mT, "--why", "another", at=62)
+    expect("a second freeze on is refused while one is on, and the first stands",
+           rc == 3 and "already on" in out and freeze_facts(dT, t0 + 62)["why"] == "counted run of G1", out)
+    rc, out = run_t("roster", at=63)
+    rc2, out2 = run_t("me", "--badge", fx, at=64)
+    rc3, out3 = run_t("me", "--badge", fx, at=64, profile="no-resource.toml")
+    rc4, out4 = run_t("freeze", "show", at=65)
+    rc5, out5 = run_t("roster", "--json", at=65)
+    expect("the roster prints a FREEZE line, me says FREEZE (with no shared resource too), show prints it, roster --json carries it",
+           "  FREEZE by MGR-1 since " in out and "lane G1" in out and "counted run of G1" in out
+           and "FREEZE: the main checkout is frozen by MGR-1" in out2 and "FREEZE: the main checkout is frozen by MGR-1" in out3
+           and rc4 == 0 and out4.startswith("FREEZE by MGR-1") and rc5 == 0 and json.loads(out5)["freeze"]["on"] is True,
+           out + out2 + out3 + out4)
+    rc, out = run_t("handin", "--badge", fx, "--file", "fix-report.md", at=66, cwd=wtf, base=henv)
+    expect("a hand-in during a freeze warns that the main checkout is frozen",
+           rc == 0 and "warning  the main checkout is frozen (by MGR-1" in out, out)
+    rc, out = run_t("roster", at=60 + 10900)
+    expect("past its --max the roster's FREEZE line reads STALE", "STALE? it is past its limit" in out, out)
+    rc, out = run_t("freeze", "off", "--by", mT, "--note", "records committed", at=70)
+    ev = read_events(dT)[-1]
+    rc2, out2 = run_t("freeze", "off", "--by", mT, at=71)
+    rc3, out3 = run_t("me", "--badge", fx, at=72, profile="no-resource.toml")
+    rc4, out4 = run_t("roster", at=72)
+    expect("freeze off removes the file and punches the clock; a second off writes nothing; the roster and me say so no more",
+           rc == 0 and not (dT / FREEZE_FILE).exists() and ev["ev"] == "freeze" and ev["on"] is False
+           and ev.get("note") == "records committed" and "freeze lifted by MGR-1" in out and rc2 == 0
+           and "nothing to lift" in out2 and read_events(dT)[-1] == ev and "FREEZE:" not in out3 and "FREEZE" not in out4
+           and "no freeze on the main checkout" in out3, out + out2 + out3 + out4)
+    (dT / FREEZE_FILE).write_text("{not json", encoding="utf-8")
+    fz = freeze_facts(dT, t0 + 73)
+    rc, out = run_t("roster", at=73)
+    expect("a freeze.json that cannot be read counts as a freeze in force, and nothing crashes",
+           fz["on"] and fz["by"] == "unknown" and "cannot be read" in fz["why"] and rc == 0 and "  FREEZE by unknown" in out, out)
+    (dT / FREEZE_FILE).unlink()
+
+    # the round: what needs the manager, most pressing first; it writes only with --by
+    rc, out = run_t("fail", "--badge", fx, "--what", "G1 VOID on the rig", "--lane", "G1", "--verdict", "VOID", at=80)
+    rid = (re.search(r"reported (R\d+)", out) or [None, "R?"])[1]
+    n_ev = len(read_events(dT))
+    rc, out = run_t("round", "--json", at=90)
+    try:
+        rj_ = json.loads(out)
+    except ValueError:
+        rj_ = {"needs": [], "crew": [], "seats": [], "first": ""}
+    kinds = [n["kind"] for n in rj_["needs"]]
+    texts = "\n".join(n["text"] for n in rj_["needs"])
+    first_of = lambda k: kinds.index(k) if k in kinds else -1
+    expect("round --json lists what needs the manager in order: usage, what waits on the user, reports, hand-ins, crew",
+           rc == 0 and 0 == first_of("usage") < first_of("decision") < first_of("blocker") < first_of("report")
+           < first_of("handin") < first_of("crew") and set(rj_) >= {"needs", "notes", "crew", "seats", "first", "usage", "freeze"},
+           out)
+    expect("the round names each thing and what to do about it",
+           "no usage point in the last 4 hours (the last is 40%" in texts and "board.py usage <percent>" in texts
+           and "D1 waits on the user" in texts and "D2 waits" not in texts and "the signing key" in texts and "a slow test" not in texts
+           and f"{rid} from TMP-01 is not filed (G1 VOID: G1 VOID on the rig)" in texts and f"fail --from {rid}" in texts
+           and "a new hand-in, TMP-01.md (Hand-in TMP-01 fix-1 (fixer (builder)): READY" in texts
+           and "EMP-01 aud-1 (auditor (reviewer)) is a session badge with no session" in texts and "assign EMP-01" in texts
+           and rj_["first"] == rj_["needs"][0]["text"], texts)
+    expect("the round's crew is one line each and the shared resource's seats follow",
+           [b["id"] for b in rj_["crew"]] == ["TMP-01", "EMP-01", "TMP-02", "TMP-03", "TMP-04", "TMP-05"]
+           and rj_["crew"][0]["text"].startswith("TMP-01 fix-1 fixer (builder) temp: UP")
+           and [s["text"] for s in rj_["seats"]] == ["seat main: free", "seat side: free"], str(rj_["crew"]) + str(rj_["seats"]))
+    expect("a round without --by writes nothing: no punch, no seen file",
+           len(read_events(dT)) == n_ev and not (dT / SEEN_FILE).exists() and rj_.get("wrote") is None, str(rj_.get("wrote")))
+    rc, out = run_t("round", at=91)
+    expect("the round as text: the numbered needs, the crew, the seats, and a last line `first: ...`",
+           rc == 0 and "  needs you (" in out and "    1. [usage] no usage point" in out and "  crew (6):" in out
+           and f"  {RES}:" in out and "    seat main: free" in out and "nothing written (no --by)" in out
+           and out.rstrip().splitlines()[-1].startswith("first: no usage point in the last 4 hours"), out)
+    rc, out = run_t("round", "--by", fT, at=92)
+    expect("round refuses a founder's line as --by and writes nothing",
+           rc == 3 and "founder" in out and len(read_events(dT)) == n_ev and not (dT / SEEN_FILE).exists(), out)
+    run_t("progress", "--badge", mT, "--pct", "35", "--note", "block 1 merged", at=93)
+    rc, out = run_t("round", "--by", mT, at=94)
+    ev = read_events(dT)[-1]
+    seen = json.loads((dT / SEEN_FILE).read_text(encoding="utf-8")) if (dT / SEEN_FILE).exists() else {}
+    expect("round --by posts the manager's heartbeat (a progress punch, pct unchanged) and marks the listed hand-ins seen",
+           rc == 0 and ev["ev"] == "progress" and ev["id"] == "MGR-1" and ev["pct"] == 35 and ev["note"].startswith("round:")
+           and list(seen.get("seen", {})) == ["TMP-01.md"] and seen.get("by") == "MGR-1"
+           and "posted MGR-1's heartbeat; marked seen: TMP-01.md" in out and "a new hand-in, TMP-01.md" in out, out)
+    rc, out = run_t("round", at=95)
+    expect("a hand-in marked seen is not listed again", rc == 0 and "a new hand-in" not in out, out)
+    rc, out = run_t("handin", "--badge", fx, "--file", "fix-report.md", at=96, cwd=wtf, base=henv)
+    rc, out = run_t("round", at=97)
+    expect("a hand-in written again after it was seen is new again", rc == 0 and "a new hand-in, TMP-01.md" in out, out)
+    over = json.loads(json.dumps(state_t))
+    over["usage"]["points"].append({"at": iso(t0 + 98), "weekly": 85})
+    (tmp / "state-titles-over.json").write_text(json.dumps(over), encoding="utf-8")
+    rc, out = run_t("round", at=99, state_name="state-titles-over.json")
+    expect("usage at or past the stop is the first thing, and a fresh point is not asked for again",
+           "    1. [usage] usage 85% is at or past the stop at 80%: start no new work" in out
+           and "no usage point in the last" not in out and out.rstrip().splitlines()[-1].startswith("first: usage 85%"), out)
+    run_t("freeze", "on", "--by", mT, "--why", "counted run of G2", "--max", "30m", at=100)
+    rc, out = run_t("round", "--json", at=101)
+    rc2, out2 = run_t("round", "--json", at=100 + 1900)
+    fr1 = [n for n in json.loads(out)["needs"] if n["kind"] == "freeze"]
+    fr2 = [n for n in json.loads(out2)["needs"] if n["kind"] == "freeze"]
+    expect("a freeze in force is listed to know, not to act on; past its limit it is one to act on",
+           len(fr1) == 1 and fr1[0]["act"] is False and "a freeze is in force by MGR-1" in fr1[0]["text"]
+           and len(fr2) == 1 and fr2[0]["act"] is True and "STALE?" in fr2[0]["text"] and "freeze off" in fr2[0]["text"],
+           str(fr1) + str(fr2))
+    run_t("freeze", "off", "--by", mT, at=102)
+    (dT / "rq.lock").mkdir()
+    (dT / "rq.lock" / "hold.json").write_text(json.dumps({"id": "MGR-1-counted-G1", "job": "counted G1", "since": t0 + 103,
+                                                          "max": 600, "all": True, "prio": 0}), encoding="utf-8")
+    rc, out = run_t("round", "--json", at=110)
+    rc2, out2 = run_t("round", "--json", at=110 + 700)
+    cr1 = [n for n in json.loads(out)["needs"] if n["kind"] == "counted"]
+    cr2 = [n for n in json.loads(out2)["needs"] if n["kind"] == "counted"]
+    expect("a counted run in the queue is listed to know; one whose hold is past its limit looks dead and is to act on",
+           len(cr1) == 1 and cr1[0]["act"] is False and "MGR-1-counted-G1 is in the queue" in cr1[0]["text"]
+           and len(cr2) == 1 and cr2[0]["act"] is True and "looks dead" in cr2[0]["text"] and "force-release" in cr2[0]["text"]
+           and json.loads(out)["seats"][0]["text"].startswith("seat main: MGR-1-counted-G1 since "), str(cr1) + str(cr2))
+    shutil.rmtree(dT / "rq.lock")
+
+    # the hand-off brief: Markdown, filled from the office and the state, three sections left to the manager
+    run_t("assign", "TMP-01", "--session", "local_fix", at=119)
+    n_ev = len(read_events(dT))
+    rc, out = run_t("handoff", "--by", fT, at=120)
+    expect("handoff refuses a founder's line and writes nothing",
+           rc == 3 and "founder" in out and not (dT / "briefs").exists() and len(read_events(dT)) == n_ev, out)
+    run_t("freeze", "on", "--by", mT, "--why", "counted run of G3", at=121)
+    rc, out = run_t("handoff", "--by", mT, at=122)
+    ho = Path(out.splitlines()[0].strip()) if rc == 0 and out.strip() else tmp / "none"
+    slot_t = rosterT()["MGR-1"]["slot"]
+    md = ho.read_text(encoding="utf-8") if ho.is_file() else ""
+    expect("handoff writes <office>/briefs/handoff-<slot>-<YYYYMMDD>.md and prints its path first",
+           rc == 0 and ho.parent == dT / "briefs" and ho.name == f"handoff-{slot_t}-{local(t0 + 122):%Y%m%d}.md" and md, out)
+    expect("the hand-off brief carries the state's now, the shift's blocks with their status, and every badge on the clock",
+           "- headline: M1 is being built" in md and "- tree: abc1234" in md and "## Shift t-shift (crew_max 12)" in md
+           and "- [done] 10:00 build M1 (checkpoint C1)" in md and "- [pending] grade G1; done when: G1 says PASS" in md
+           and "- MGR-1 mgr-t, manager, session, session local_mgr-t: " in md
+           and "- TMP-01 fix-1, fixer (builder), temp, session local_fix: the job of fix-1; " in md and "%, finish ~" in md
+           and "- hired, not clocked in: EMP-01 aud-1 (auditor (reviewer))" in md and "\nBenches: \n" in md, md)
+    expect("the hand-off brief lists open failures with status and owner, open decisions, the freeze, the journal and usage",
+           "## Open failures (1)" in md and "- F1 open, owner EMP-01: G1 VOID on the harness" in md and "- F2" not in md
+           and f"- reports not filed yet: {rid}" in md and "## Open decisions (1)" in md and "- D1: how many seats" in md
+           and "- FREEZE by MGR-1 since " in md and "counted run of G3" in md and "## Journal" in md
+           and "## Usage" in md and "- 40% at " in md and "the stop is 80%" in md, md)
+    heads = ["## The user's words this slot (quoted, with the time)", "## Promised to the crew",
+             "## Background jobs this session started"]
+    expect("the hand-off brief ends with three sections for the manager to fill, each with one line saying what goes there",
+           all(h in md for h in heads) and md.count("_Fill by hand: ") == 4
+           and md.index(heads[0]) < md.index(heads[1]) < md.index(heads[2]), md[-900:])
+    rc, out = run_t("handoff", "--by", mT, at=123)
+    ho2 = Path(out.splitlines()[0].strip()) if rc == 0 and out.strip() else tmp / "none"
+    expect("a second handoff never overwrites: it writes <name>-2.md and leaves the first as it was",
+           rc == 0 and ho2.name == ho.stem + "-2.md" and ho2.is_file() and ho.read_text(encoding="utf-8") == md, out)
+    rc, out = run_t("handoff", "--by", mT, "--out", str(tmp / "my-handoff.md"), at=124)
+    rc2, out2 = run_t("handoff", "--by", mT, "--out", str(tmp / "my-handoff.md"), at=125)
+    rc3, out3 = run_t("handoff", "--by", mT, "--out", str(tmp / "no-such-folder" / "h.md"), at=126)
+    expect("handoff --out writes the named file, a second call beside it as -2, and a missing folder is refused",
+           rc == 0 and (tmp / "my-handoff.md").is_file() and rc2 == 0 and (tmp / "my-handoff-2.md").is_file()
+           and rc3 == 3 and "folder does not exist" in out3, out + out2 + out3)
+    run_t("freeze", "off", "--by", mT, at=127)
+
+    # a freeze.json with an odd number holds (ON, by unknown, the reason in why) and nothing that prints it crashes
+    odd_ok, odd_out = True, ""
+    for label, text in (("at in milliseconds", '{"by": "MGR-1", "why": "w", "at": 1790000000000, "max_s": 60}'),
+                        ("at 1e999", '{"by": "MGR-1", "why": "w", "at": 1e999, "max_s": 60}'),
+                        ("at NaN", '{"by": "MGR-1", "why": "w", "at": NaN}'),
+                        ("at below zero", '{"by": "MGR-1", "why": "w", "at": -5}'),
+                        ("at true", '{"by": "MGR-1", "why": "w", "at": true}'),
+                        ("at a list", '{"by": "MGR-1", "why": "w", "at": [1]}'),
+                        ("nested past the reader's depth", '{"at": ' + "[" * 200000 + "]" * 200000 + "}"),
+                        ("max_s 1e999", '{"by": "MGR-1", "why": "w", "at": %r, "max_s": 1e999}' % (t0 + 127),),
+                        ("max_s below zero", '{"by": "MGR-1", "why": "w", "at": %r, "max_s": -1}' % (t0 + 127),),
+                        ("max_s a word", '{"by": "MGR-1", "why": "w", "at": %r, "max_s": "long"}' % (t0 + 127),)):
+        (dT / FREEZE_FILE).write_text(text, encoding="utf-8")
+        try:
+            fz = freeze_facts(dT, t0 + 127.5)
+            line = freeze_text(fz, t0 + 127.5)
+        except Exception as e:  # the case is that there is none
+            fz, line = {}, f"{type(e).__name__}: {e}"
+        outs = [run_t("roster", at=127.5), run_t("me", "--badge", fx, at=127.5), run_t("round", at=127.5),
+                run_t("freeze", "show", at=127.5), run_t("freeze", "show", "--json", at=127.5),
+                run_t("handoff", "--by", mT, "--out", str(tmp / "odd-handoff.md"), at=127.5)]
+        good = (fz.get("on") is True and fz.get("by") == "unknown" and "cannot be read" in fz.get("why", "")
+                and fz.get("at") is None and line.startswith("by unknown")
+                and all(rc_ == 0 and "Traceback" not in o_ for rc_, o_ in outs) and "FREEZE by unknown" in outs[0][1]
+                and "frozen by unknown" in outs[1][1] and "FREEZE by unknown" in outs[3][1])
+        if not good:
+            odd_ok, odd_out = False, odd_out + f"\n{label}: {fz} {line}\n" + "\n".join(o_[-400:] for _, o_ in outs)
+    (dT / FREEZE_FILE).unlink()
+    expect("a freeze.json whose at or max_s is not a sane time or length reads as ON by unknown, and the roster, me, "
+           "round, handoff and freeze show print it without a traceback", odd_ok, odd_out)
+    try:
+        bad_line = freeze_text({"on": True, "by": "MGR-1", "why": "w", "lane": None, "at": 1.79e12, "max_s": float("inf"),
+                                "stale": False}, t0 + 127.5)
+    except Exception as e:
+        bad_line = f"{type(e).__name__}: {e}"
+    expect("freeze_text() says a time it cannot show instead of raising",
+           bad_line.startswith("by MGR-1 since a time that cannot be shown") and "limit cannot be shown" in bad_line, bad_line)
+    try:
+        u_text = [usage_text({"stop": "eighty", "last": None, "at": None}, t0), usage_text({"stop": None, "last": 40.0, "at": t0 - 60}, t0),
+                  usage_text(usage_facts({"usage": {"stop": "x"}}, t0), t0)]
+    except Exception as e:
+        u_text = [f"{type(e).__name__}: {e}"]
+    expect("a usage stop that is not a number is said, not formatted",
+           len(u_text) == 3 and u_text[0] == "no usage point recorded; the stop is not a number"
+           and u_text[1].startswith("40% at ") and u_text[1].endswith("the stop is not a number")
+           and u_text[2] == "no usage point recorded; the stop is 80%", str(u_text))
+    # freeze --max takes a unit, as rq.py and sweep.py do; --eta alone still reads a bare number as minutes
+    rc, out = run_t("freeze", "on", "--by", mT, "--why", "counted run of G3", "--max", "180", at=128)
+    rc2, out2 = run_t("freeze", "on", "--by", mT, "--why", "counted run of G3", "--max", "1h30", at=128)
+    rc3, out3 = run_t("hire", "--help", at=128)
+    rc4, out4 = run_t("progress", "--help", at=128)
+    try:
+        durs = (parse_dur("45"), parse_dur("1h30"), parse_dur("30m", unit=True), parse_dur("1h30m", unit=True), parse_dur("3h", unit=True))
+    except Refused as e:
+        durs = str(e)
+    expect("freeze on --max refuses a bare number and names the units; hire and progress say --eta still reads one as minutes",
+           rc == 3 and "write a unit: 30m, 3h" in out and rc2 == 3 and "cannot read the duration" in out2
+           and not (dT / FREEZE_FILE).exists() and "bare number as minutes" in " ".join(out3.split())
+           and "bare number as minutes" in " ".join(out4.split()) and durs == (2700, 5400, 1800, 5400, 10800),
+           out + out2 + str(durs))
+    # a counted sweep's own freeze is not lifted under it without --force
+    n_ev = len(read_events(dT))
+    sweep_ok, sweep_out = True, ""
+    for by_, why_ in (("MGR-1-sweep", "counted sweep"), ("MGR-1-counted-G1", "a run"), ("MGR-1", "Counted sweep of 3 lanes")):
+        (dT / FREEZE_FILE).write_text(json.dumps({"by": by_, "why": why_, "lane": None, "at": t0 + 128, "max_s": 3600}),
+                                      encoding="utf-8")
+        rc, out = run_t("freeze", "off", "--by", mT, at=128.5)
+        if not (rc == 3 and "sweep.py" in out and " status" in out and "--force" in out and "may still be running" in out
+                and (dT / FREEZE_FILE).exists() and len(read_events(dT)) == n_ev):
+            sweep_ok, sweep_out = False, sweep_out + f"\n{by_}/{why_}: {rc} {out}"
+    rc, out = run_t("freeze", "off", "--by", mT, "--force", "--note", "the sweep's session died", at=129)
+    ev = read_events(dT)[-1]
+    expect("freeze off refuses a counted sweep's freeze (by its why or its id) and names sweep.py status; --force lifts it",
+           sweep_ok and rc == 0 and not (dT / FREEZE_FILE).exists() and ev["ev"] == "freeze" and ev["on"] is False
+           and "freeze lifted by MGR-1" in out, sweep_out + out)
+    # an earlier hand-in kept as <id>.<n>.md is not a new hand-in
+    live_before = [h["file"] for h in new_handins(dT)[0]]
+    (dT / "handins").mkdir(parents=True, exist_ok=True)
+    (dT / "handins" / "TMP-01.1.md").write_text("# Hand-in TMP-01 fix-1 (fixer (builder)): READY\n", encoding="utf-8")
+    (dT / "handins" / "TMP-77.md").write_text("# Hand-in TMP-77 x (builder): READY\n", encoding="utf-8")
+    new_, stamps_ = new_handins(dT)
+    rc, out = run_t("round", at=129.5)
+    expect("the round lists only the live <id>.md hand-ins, never an archived <id>.<n>.md",
+           [h["file"] for h in new_] == sorted(live_before + ["TMP-77.md"]) and "TMP-01.1.md" not in stamps_
+           and "TMP-77.md" in out and "TMP-01.1.md" not in out, str(new_) + out)
+    (dT / "handins" / "TMP-01.1.md").unlink()
+    (dT / "handins" / "TMP-77.md").unlink()
+    head_ = (dT / "handins" / "TMP-01.md").read_text(encoding="utf-8").split("\n", 1)[0] if (dT / "handins" / "TMP-01.md").is_file() else ""
+    expect("the hand-in file's heading shows the title as the roster does", head_.startswith("# Hand-in TMP-01 fix-1 (fixer (builder)): "), head_)
+    rc, out = run_t("brief", "TMP-01", "--by", mT, at=129.6, profile="no-resource.toml")
+    rc2, out2 = run_t("brief", "TMP-01", "--by", mT, at=129.6)
+    expect("with no shared resource the brief says a counted run shows as FREEZE in `office.py me`",
+           rc == 0 and "While a counted run is going (you see it as FREEZE in `" in out and " me`)" in out
+           and "the manager says when" not in out and rc2 == 0 and "the roster says COUNTED SWEEP" in out2, out)
+
+    # the manager's timer list: a file the tool writes and checks; it creates no timer
+    tf_ = dT / TIMERS_FILE
+    rc, out = run_t("timers", "show", at=130)
+    rc2, out2 = run_t("timers", "init", "--by", fT, at=131)
+    rc3, out3 = run_t("timers", "init", at=132)
+    expect("timers show with no file exits 1 and names init; init refuses a founder's line and a missing --by",
+           rc == 1 and "timers init" in out and rc2 == 3 and "founder" in out2 and rc3 == 3 and not tf_.exists(), out + out2 + out3)
+    rc, out = run_t("timers", "init", "--by", mT, at=133)
+    tj_ = json.loads(tf_.read_text(encoding="utf-8")) if tf_.exists() else {"timers": []}
+    by_name = {t.get("name"): t for t in tj_["timers"]}
+    expect("timers init writes the round and each slot's hand-off (40 min before its end) and start, from the rota and the "
+           "manager skill's name",
+           rc == 0 and list(by_name) == ["round", "handoff-day", "start-day", "handoff-swing", "start-swing", "handoff-night",
+                                         "start-night"]
+           and by_name["round"] == {"name": "round", "recurring": True, "every": "2h",
+                                    "prompt": "/foundry-manager status, then the round"}
+           and by_name["handoff-day"] == {"name": "handoff-day", "recurring": True, "at": "13:20",
+                                          "prompt": "/foundry-manager shift-change"}
+           and by_name["handoff-night"]["at"] == "05:20" and by_name["handoff-swing"]["at"] == "21:20"
+           and by_name["start-swing"] == {"name": "start-swing", "recurring": True, "at": "14:00",
+                                          "prompt": "/foundry-manager start"}, out + str(tj_))
+    expect("timers init says the tool creates no timer", "the manager creates them in its session: this file is the list" in out, out)
+    body = tf_.read_text(encoding="utf-8") if tf_.exists() else ""
+    rc, out = run_t("timers", "init", "--by", mT, at=134)
+    rc2, out2 = run_t("timers", "show", at=135)
+    expect("a second timers init leaves the file as it is; show prints it and finds its shape right (exit 0)",
+           rc == 0 and "already there" in out and tf_.read_text(encoding="utf-8") == body and rc2 == 0
+           and "7 timers, the shape is right" in out2 and "    handoff-day: at 13:20, recurring: /foundry-manager shift-change" in out2
+           and "the manager creates them in its session: this file is the list" in out2, out + out2)
+    tj_["timers"] += [{"name": "odd", "recurring": "yes", "prompt": "x"}, {"recurring": True, "at": "25:00", "prompt": ""}, 7,
+                      {"name": "late", "recurring": False, "every": "soon", "prompt": "p"}]
+    tf_.write_text(json.dumps(tj_), encoding="utf-8")
+    rc, out = run_t("timers", "show", at=136)
+    expect("timers show exits 1 and names each bad entry and what is wrong with it",
+           rc == 1 and "BAD entry 8 (odd): recurring is not true or false, neither every nor at" in out
+           and "BAD entry 9 (unnamed): no name, at '25:00' is not a clock time (HH:MM), no prompt" in out
+           and "BAD entry 10: not an object" in out and "BAD entry 11 (late): every 'soon' is not a duration" in out
+           and "BAD entry 1 " not in out, out)
+    tf_.write_text("[1, 2]", encoding="utf-8")
+    rc, out = run_t("timers", "show", at=137)
+    expect("a timers file of another shape is named as such (exit 1)", rc == 1 and 'not {"timers": [...]}' in out, out)
+
+    # a quiet office with no shared resource: nothing needs the manager; then no state file at all
+    dq = tmp / "office-quiet"
+    _, q0, q1 = slot_at(DEFAULT_SLOTS, t0 + 86400)
+
+    def run_q(*args, ts, state_name="state-quiet.json"):
+        r = subprocess.run([sys.executable, __file__, *args], capture_output=True, text=True, encoding="utf-8", timeout=120,
+                           cwd=tmp, env={**env, "FOUNDRY_PATHS_OFFICE": str(dq), "FOUNDRY_NOW": str(ts),
+                                         "FOUNDRY_PATHS_STATE": str(tmp / state_name),
+                                         "FOUNDRY_PROFILE": str(tmp / "no-resource.toml")})
+        return r.returncode, r.stdout + r.stderr
+
+    quiet = {"shift": {"id": "q-shift", "crew_max": 2}, "usage": {"points": [{"at": iso(q0 + 500), "weekly": 10}]}}
+    (tmp / "state-quiet.json").write_text(json.dumps(quiet), encoding="utf-8")
+    rc, out = run_q("appoint", "--name", "mgr-q", "--this-slot", ts=q0 + 600)
+    mq = badge_of(out) if rc == 0 else ""
+    run_q("clock-in", "--badge", mq, ts=q0 + 610)
+    rc, out = run_q("round", "--by", mq, ts=q0 + 700)
+    expect("in a quiet office with no shared resource the round lists nothing, prints no seat, and says to end the turn",
+           rc == 0 and "  needs you: nothing" in out and "crew: nobody hired or on the clock" in out and "seat " not in out
+           and "usage: 10% at " in out and out.rstrip().splitlines()[-1] == "first: nothing needs you; end the turn", out)
+    quiet["usage"]["points"][0]["weekly"] = 80
+    (tmp / "state-quiet-over.json").write_text(json.dumps(quiet), encoding="utf-8")
+    rc, out = run_q("round", ts=q0 + 701, state_name="state-quiet-over.json")
+    expect("with no stop in the state the round reads limits.usage_stop from the profile",
+           rc == 0 and "usage 80% is at or past the stop at 80%" in out, out)
+    if (tools_here / "journal.py").is_file():
+        quiet["usage"]["points"] = [{"at": iso(q1 - 2000), "weekly": 10}]
+        (tmp / "state-quiet-late.json").write_text(json.dumps(quiet), encoding="utf-8")
+        rc, out = run_q("round", "--json", ts=q1 - 1800, state_name="state-quiet-late.json")
+        try:
+            needs_q = json.loads(out)["needs"]
+        except ValueError:
+            needs_q = []
+        expect("inside the last hour of the shift the round says the journal's plan is due and how to make it ready",
+               rc == 0 and [n["kind"] for n in needs_q] == ["journal"] and "journal.py" in needs_q[0]["text"]
+               and " ready`" in needs_q[0]["text"], out)
+    else:
+        print("  skip the round's journal case: no journal.py beside office.py")
+    n_ev = len(read_events(dq))
+    rc, out = run_q("round", ts=q0 + 710, state_name="no-such-state.json")
+    rc2, out2 = run_q("handoff", "--by", mq, ts=q0 + 711, state_name="no-such-state.json")
+    hq = Path(out2.splitlines()[0].strip()) if rc2 == 0 and out2.strip() else tmp / "none"
+    mdq = hq.read_text(encoding="utf-8") if hq.is_file() else ""
+    rc3, out3 = run_q("timers", "init", "--by", mq, ts=q0 + 712, state_name="no-such-state.json")
+    rc4, out4 = run_q("freeze", "on", "--by", mq, "--why", "counted run of G1", ts=q0 + 713, state_name="no-such-state.json")
+    rc5, out5 = run_q("roster", ts=q0 + 714, state_name="no-such-state.json")
+    expect("with no state file the round, the hand-off and the timers each say what is missing, and nothing crashes",
+           rc == 0 and "note: no state file (" in out and "board.py" in out and "first: " in out
+           and rc2 == 0 and "**Missing:** no state file (" in mdq and "- not read (no state)" in mdq
+           and "## The user's words this slot" in mdq
+           and rc3 == 0 and "the profile's: there is no state file" in out3 and (dq / TIMERS_FILE).is_file()
+           and "Traceback" not in out + out2 + out3 + out4 + out5, out + out2 + out3)
+    expect("with no shared resource and no state file a freeze still holds: the roster prints its FREEZE line",
+           rc4 == 0 and rc5 == 0 and "  FREEZE by MGR-1 since " in out5 and freeze_facts(dq, q0 + 715)["on"], out4 + out5)
+
     # concurrent punches under the lock lose nothing
     d = Path(env["FOUNDRY_PATHS_OFFICE"])
     before = len(read_events(d))
@@ -3720,14 +5317,32 @@ def _selftest(tmp):
     expect("240 concurrent appends all land, numbered once each",
            len(evs) - before == 240 and seqs == list(range(1, len(evs) + 1)), f"{len(evs) - before} landed")
 
+    # the roster's JSON names a plate only when the file is there (no segno, no plate: null)
+    plates = [b["plate"] for b in crew(d)["badges"]]
+    gone = d / "badges" / "EMP-01.svg"
+    held = gone.read_bytes() if gone.is_file() else None
+    if held is not None:
+        gone.unlink()
+    p_gone = next((b["plate"] for b in crew(d)["badges"] if b["id"] == "EMP-01"), "absent")
+    if held is not None:
+        gone.write_bytes(held)
+    expect("the roster's JSON gives a badge's plate as null when the file is not there, never a path that does not exist",
+           bool(plates) and all(p is None or Path(p).is_file() for p in plates) and p_gone is None
+           and (any(plates) if HAVE_SEGNO else not any(plates)), str(plates) + str(p_gone))
+
     # the plate: deterministic, and the line round-trips through parse into the same plate
     roster = read_roster(d)
     rec = roster["badges"]["EMP-01"]
-    svg1 = plate(d, rec).read_text(encoding="utf-8")
     fields, _ = parse_line(rec["line"])
     rebuilt = make_line(load_key(d), {k: fields[k] for k in FIELDS})
-    svg2 = plate(d, {**rec, "line": rebuilt}).read_text(encoding="utf-8")
-    expect("the plate is an SVG and the line round-trips into the same plate", svg1.startswith("<svg") and rebuilt == rec["line"] and svg1 == svg2)
+    expect("the line round-trips through parse into the same line", rebuilt == rec["line"])
+    p1 = plate(d, rec)
+    if p1 is None:  # segno is optional: every case above ran without a plate
+        print("  skip the plate is an SVG (segno is not installed)")
+    else:
+        svg1 = p1.read_text(encoding="utf-8")
+        svg2 = plate(d, {**rec, "line": rebuilt}).read_text(encoding="utf-8")
+        expect("the plate is an SVG and the same line draws the same plate", svg1.startswith("<svg") and svg1 == svg2)
 
     for x in ok:
         print(f"  ok   {x}")
@@ -3776,8 +5391,16 @@ def main(argv):
     which.add_argument("--slot", help="the slot this manager is for (day, swing, night): the slot now, or the next one "
                                       "in the last hour before it starts")
     s = sub.add_parser("hire")
-    for k in ("--by", "--name", "--role", "--kind", "--job", "--eta"):
+    for k in ("--by", "--name", "--kind", "--job"):
         s.add_argument(k, required=True)
+    s.add_argument("--eta", required=True, help="how long the job should take (90m, 2h, 1h30m); --eta alone still "
+                                                "reads a bare number as minutes (freeze --max refuses one)")
+    s.add_argument("--role", help="builder, grader, reviewer or scout (or give --title, which sets the role)")
+    s.add_argument("--title", help="the card the badge is hired on: builder, fixer, grader, reviewer, scout, triager, "
+                                   "cleaner, or one the profile adds under [titles]")
+    s.add_argument("--model", help="the model id the brief names, in place of the profile's [models] or [flagged]")
+    s.add_argument("--force-model", action="store_true",
+                   help="take --model for a flagged title whose [flagged] table names another model")
     for k in ("--lane", "--seat", "--files", "--done-when"):
         s.add_argument(k)
     s.add_argument("--rq", action="store_true")
@@ -3805,7 +5428,8 @@ def main(argv):
     s = sub.add_parser("progress")
     s.add_argument("--badge", required=True)
     s.add_argument("--pct", type=int, required=True)
-    s.add_argument("--eta")
+    s.add_argument("--eta", help="the approximate finish: a clock time (17:50) or a length from now (40m, 2h); --eta "
+                                 "alone still reads a bare number as minutes (freeze --max refuses one)")
     s.add_argument("--note")
     s.add_argument("--waiting-on")
     s.add_argument("--run")
@@ -3841,6 +5465,25 @@ def main(argv):
     s.add_argument("--by", required=True)
     s.add_argument("--lose-temps", action="store_true")
     s.add_argument("--out", help="also write the log entry's crew list as JSON to this file")
+    s = sub.add_parser("freeze", help="hold the main checkout still for a counted run (on, off: the manager; show: anyone)")
+    s.add_argument("action", choices=("on", "off", "show"))
+    s.add_argument("--by", help="the manager's line (on and off)")
+    s.add_argument("--why", help="on: the run the freeze covers")
+    s.add_argument("--lane", help="on: the lane being counted")
+    s.add_argument("--max", help="on: how long the freeze should last at most, with its unit (3h, 90m; a bare "
+                                 "number is refused); past it the freeze reads STALE")
+    s.add_argument("--force", action="store_true", help="off: lift a freeze a counted sweep set while it may still run")
+    s.add_argument("--note", help="off: a word for the time clock")
+    s.add_argument("--json", action="store_true", help="show: freeze_facts as JSON")
+    s = sub.add_parser("round", help="the manager's wake-up: what needs the manager first, the crew, the seats")
+    s.add_argument("--by", help="the manager's line: also posts the heartbeat and marks the listed hand-ins seen")
+    s.add_argument("--json", action="store_true")
+    s = sub.add_parser("handoff", help="write the next manager's hand-off brief (Markdown)")
+    s.add_argument("--by", required=True)
+    s.add_argument("--out", help="the file to write (default: <office>/briefs/handoff-<slot>-<YYYYMMDD>.md)")
+    s = sub.add_parser("timers", help="the manager's timer list: init writes it, show prints and checks it")
+    s.add_argument("action", choices=("init", "show"))
+    s.add_argument("--by", help="the manager's line (init)")
     s = sub.add_parser("verify")
     s.add_argument("line")
     s = sub.add_parser("badge")
@@ -3848,10 +5491,13 @@ def main(argv):
     a = p.parse_args(argv[1:])
     if a.cmd == "clock-out" and not (a.badge or a.by):
         p.error("clock-out needs --badge (your own) or --by and --id (the manager)")
+    if a.cmd == "hire" and not (a.role or a.title):
+        p.error("hire needs --role or --title")
     fn = {"found": cmd_found, "appoint": cmd_appoint, "hire": cmd_hire, "assign": cmd_assign, "amend": cmd_amend, "brief": cmd_brief,
           "clock-in": cmd_clock_in, "progress": cmd_progress,
           "fail": cmd_fail, "clock-out": cmd_clock_out, "roster": cmd_roster, "end-shift": cmd_end_shift,
           "verify": cmd_verify, "badge": cmd_badge, "me": cmd_me, "runs": cmd_runs, "handin": cmd_handin,
+          "freeze": cmd_freeze, "round": cmd_round, "handoff": cmd_handoff, "timers": cmd_timers,
           "status": cmd_me if getattr(a, "badge", None) else cmd_roster}[a.cmd]
     try:
         return fn(a, office_dir(), now_ts())

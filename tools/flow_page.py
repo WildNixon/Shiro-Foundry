@@ -139,7 +139,8 @@ def canvas_html(data, fallback_svg, shell=ROAD_SHELL):
     """The canvas, its tool bar and panel; the old static SVG shows where scripts are off. `shell`: this graph's
     view buttons and words (the road graph's unless another graph passes its own)."""
     blob = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    views = "".join(f'<button type="button" data-view="{v}"{" class=\"on\"" if i == 0 else ""}>{name}</button>' for i, (v, name) in enumerate(shell["views"]))
+    on = ' class="on"'  # not written inside the f-string: a backslash in a replacement field needs Python 3.12
+    views = "".join(f'<button type="button" data-view="{v}"{on if i == 0 else ""}>{name}</button>' for i, (v, name) in enumerate(shell["views"]))
     return (f'<div class="gbar"><div class="seg" role="group" aria-label="View">{views}</div>'
             '<span id="gcrumb" class="crumb"></span><span class="grow"></span>'
             f'<input id="gsearch" type="search" placeholder="{shell["find"]}" aria-label="Find a node">'

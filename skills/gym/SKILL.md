@@ -47,6 +47,13 @@ The method below is the same everywhere; a Foundry project adds who writes what,
   failure with a plan.
 - Run outcomes go to the contract owner's amendment, never into shared notes a grader reads before pinning.
 - The board (`board.py`) reads lane facts from `gym/series/*.json`, never from a typed claim.
+- `gym_init.py init` scaffolds a starter gym (`lane add <lane>` one more lane, `check` reads it as the tools will): a runner, one
+  example lane, a prereg template marked not registered and a contract draft. It decides nothing until a grader writes the measure.
+- The scaffolded runner is `gym/run.py list | selftest | dev <lane> | counted <lane>`; `counted` refuses a dirty tree and a
+  prereg that is still a template, and only the manager runs it. A counted run is published as VOID when nothing shows it
+  sampled the commit it names: the tree is not clean after the collect, or HEAD moved during it. Its exit code: 0 PASS, 1
+  any other verdict word, 2 a refusal, 3 the runner itself failed or a lane called `sys.exit` (no verdict: never read it as
+  a FAIL), 130 an interrupt.
 
 ## The Build sequence
 

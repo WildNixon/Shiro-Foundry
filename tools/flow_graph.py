@@ -31,6 +31,12 @@ The badge and the signed log keep an honest record, as badges do (office.py): th
 hooks may also refuse a hand edit of either file (the profile's hooks.protect); ask the manager for a change.
 The script commits nothing: the manager commits the flow folder like any other map edit.
 
+An edit writes tracked files, so in the main checkout every edit command (seed, link, unlink, confirm, node, undo)
+is refused, exit 3 with one line naming the freeze, while the main checkout is frozen: the manager's freeze is on
+(`office.py freeze show`) or a counted run or sweep holds or waits for the shared resource (`rq.py status`). The
+badge is checked first. show, trace and verify only read and are never refused. A worktree is never frozen.
+freeze_refusal() here is the one check plan_flow.py and gym_init.py use for the same rule.
+
 What an ID is comes from the profile's [roadmap] table: milestone_id, decision_id, stage_id, the goal (the last
 stage) and, when the project has them, late_stages (named stages between the numbered ones and the goal) and
 block_id (how a push block's title opens). A lane is named as measure.lane_pattern says.
@@ -187,6 +193,100 @@ def office():
     finally:
         sys.path.pop(0)
     return mod.office_dir(), mod
+
+
+def freeze_marker(off, d):
+    """The manager's own freeze, as one line, or "" when it is off: office.py's freeze_facts() where office.py has
+    it, else the office's freeze.json read with the same meaning ({"by", "why", "lane", "at", "max_s"}; absent means
+    off; a freeze past its limit still holds until it is lifted; a file that cannot be read is a freeze in force)."""
+    facts = getattr(off, "freeze_facts", None)
+    if callable(facts):
+        fz = facts(d, off.now_ts())
+        if not fz.get("on"):
+            return ""
+        text = getattr(off, "freeze_text", None)
+        return "the manager's freeze " + (text(fz, off.now_ts()) if callable(text) else f"by {fz.get('by')}: {fz.get('why')}")
+    path = Path(d) / "freeze.json"
+    if not path.exists():
+        return ""
+    try:
+        j = json.loads(path.read_text(encoding="utf-8"))
+        float(j["at"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return "the manager's freeze by unknown: freeze.json cannot be read"
+    return (f"the manager's freeze by {j.get('by') or 'unknown'}" + (f", lane {j['lane']}" if j.get("lane") else "")
+            + f": {j.get('why') or '(no reason given)'}")
+
+
+def frozen(office_dir=None):
+    """(runs, maybe), or None when the crew office cannot be read. `runs`: what freezes the main checkout now, by
+    the office's and the board's rule: the counted sweeps and runs holding or waiting for the shared resource,
+    known by a <badge>-sweep or <badge>-counted[-<lane>] queue id (never by prio 0 alone), and the manager's own
+    freeze (freeze_marker). While one is there nothing in the main checkout may change. `maybe`: prio-0 or
+    whole-resource jobs under a plain id that office.py cannot tell from a counted run (the roster's COUNTED?).
+    office.py's reader turns every unreadable file into an empty queue, so what it would hide is checked here
+    first. A project with no shared resource has no queue: only the manager's freeze can hold it.
+
+    The one reader of the freeze for every tool that writes tracked files into the main checkout: plan_flow.py
+    (new, build), the graph's edits here, and gym_init.py (init, lane add)."""
+    d, off = office()
+    if off is None:
+        return None
+    d = Path(office_dir) if office_dir else Path(d)
+    if not d.is_dir():
+        return None
+    queue = d / "rq.queue.json"
+    try:
+        if queue.exists() and not isinstance(json.loads(queue.read_text(encoding="utf-8")), list):
+            return None
+        rq = off.rq_facts(d, off.now_ts())
+        if any(h["id"] == "unknown" for h in rq["holds"]):  # a seat is held and its lock does not say by whom
+            return None
+        runs = list(off.sweep_ids(rq))
+        marker = freeze_marker(off, d)
+        return runs + ([marker] if marker else []), list(off.unmarked_counted(rq))
+    except Exception:  # an office this office.py cannot read is not a clear queue
+        return None
+
+
+def is_main(root):
+    """Whether the checkout `root` is the main checkout of its repository (FOUNDRY_MAIN names it, else git does; a
+    folder git does not know is its own main checkout). A worktree is not: a freeze holds the main checkout only."""
+    try:
+        return os.path.samefile(root, fp.main_checkout(Path(root)))
+    except OSError:
+        return True  # it cannot be told: hold still, as for the main checkout
+
+
+def freeze_refusal(what, root, office_dir=None):
+    """One line saying why `what` may not write tracked files under the checkout `root` now, or None. It may not
+    while the main checkout is frozen: the manager's freeze is on, or a counted run or sweep holds or waits for
+    the shared resource (frozen(), the rule plan_flow.py, the office and the board go by). A worktree is never
+    frozen. A project with no crew office folder yet has nothing that could freeze it. An office that is there and
+    cannot be read cannot rule a freeze out, so that refuses too."""
+    if not is_main(root):
+        return None
+    d = office_dir
+    if d is None:
+        d, off = office()
+        if off is None:
+            return None  # no office.py beside this tool: no crew office, so nothing freezes
+    if not Path(d).is_dir():
+        return None
+    see = f"see it with `{P.tool('office.py')} freeze show`" + (f" and `{P.tool('rq.py')} status`" if P.has_resource() else "")
+    state = frozen(d)
+    if state is None:
+        return (f"{what}: the crew office's resource queue or freeze could not be read ({d}), so a freeze cannot be "
+                f"ruled out; nothing written ({see}).")
+    runs, maybe = state
+    if maybe and not runs:
+        print(f"note: {', '.join(maybe)} holds or waits for the shared resource at prio 0 or as a whole, under a plain id "
+              "(the roster's COUNTED?). A counted run is seen only by its queue id: if that job is one, the freeze is "
+              f"the manager's to keep by hand (`{P.tool('office.py')} freeze on`).", file=sys.stderr)
+    if runs:
+        return (f"{what} would change tracked files in the main checkout during a freeze ({'; '.join(runs)}); nothing "
+                f"written. Wait until the counted run ends, its records are committed and the freeze is lifted ({see}).")
+    return None
 
 
 def office_key(d):
@@ -365,6 +465,9 @@ def sortkey(nid):
 def edit(root, by, op, change, office_dir=None):
     """Check the badge, make sure the asset is sound, apply `change(g) -> (kind, key, before, after, text)` and log it."""
     rec, d, off, key = manager(by, office_dir)
+    why = freeze_refusal(f"graph {op}", root, d)  # the badge first, then the freeze: it holds the manager too
+    if why:
+        raise Refused(why)
     with off.locked(d):
         g, bad = load(root)
         if op == "seed":

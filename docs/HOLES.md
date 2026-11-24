@@ -1,59 +1,46 @@
-# Known holes and next improvements
+# Known holes
 
-Written at 0.1.0 from three checks: every selftest and test run together (17 runs, all passing), an end-to-end trial on a scratch project (install, found, appoint, hire, clock in, board, decisions, flow, plan chart, journal, queue, hooks), and a review of every command the skills name against the tools' code. What those checks fixed is in the changelog. What they left open is here, most important first.
+What is not verified, not enforced or still missing at 0.2.0, most important first. The first audit's list (0.1.0) had 28 items; the changelog says which were closed and how. What is left is here, with nothing rounded up.
 
 ## Not verified
 
-1. **The skills have not been run on a second project from a clean start.** They are conversions of skills in daily use, and each rule was kept, but nobody has yet followed the general text with no other knowledge. An earlier rewrite of the same skills lost to the original on a held-out test (it led with routine steps ahead of the key action and padded its answers), so this text needs its own test before it replaces skills that work: a pool of real incidents from at least two projects, scored on the first action and on precision.
-2. **Only one host.** Everything was run on Windows with Git Bash and Python 3.14. Python 3.11 to 3.13, Linux and macOS are expected to work (standard library only; one 3.12-only call was removed) and have not been run.
-3. **The chart pages' script was not executed after the port.** `flow.py build` and `plan_flow.py build` write their pages and the pages' data was checked; the six small changes to the page script were checked by reading.
-4. **The map and chart pages were not looked at in a browser** after the port: their HTML was built and searched for leftovers, not viewed.
-
-## Missing: a project must supply these
-
-5. **A gym to start from.** Nothing scaffolds `gym/` (a `run.py`, a lane-inputs table, the first lane). The gym skill and its `gym_kit.py` are the material; the first grader builds it. Until then the board says "no gym yet", no milestone can pass, and `lanes_for.py` has nothing to read.
-6. **A sweep.** The skills describe a counted sweep of every lane at a push's close; the tool that runs one is the project's own (`measure.sweep` names it; no tool reads the key).
-7. **A system graph reader.** The canvas (`flow_page.py`) can draw a graph of the system as built; the reader that makes one from the code is the project's own.
-8. **A way to read usage.** The manager reads the plan's weekly usage in the app and records it with `board.py usage`. No tool reads it.
+1. **Nobody but the authors has run the skills on a new project.** The skills are conversions of ones in daily use on two projects, and every command they name was checked against the tools, most by running it. That is not the same as a fresh manager session following the text with no other knowledge. An earlier rewrite of the same skills lost to the original on a held-out test (it led with routine steps ahead of the key action and padded its answers). A project that already runs working skills should test these on real incidents, scored on the first action and on precision, before switching.
+2. **Linux and macOS were not run by hand.** Development was on Windows with Git Bash. The whole suite passes there on Python 3.11, 3.12 and 3.14. CI runs it on Linux, macOS and Windows for 3.11 to 3.14; the badge on the README is the current answer. The queue's process-group code for Linux and macOS (ending a job and what it started, releasing the seat on a stop signal) was written and reviewed by reading; CI is its first run.
+3. **The chart pages were run in two browsers, not every case.** Every view, node and trace button was clicked on a plan page and a workflow page with no script error, and a structural check of both runs with the tests. Not exercised: dragging, wheel zoom, the light theme.
+4. **The diagrams in the documentation** (Mermaid) were written, not rendered.
 
 ## Rules the tools do not enforce
 
-9. **`[models]` and `[flagged]`.** No tool reads them. The manager looks them up and sets the session's model by hand; the hire brief does not print them. Wanted: `hire --title`, with the title's card, model and trailer printed into the brief and refused when broken.
-10. **Titles beyond four roles.** `office.py --role` takes builder, grader, reviewer, scout. Fixer, triager and cleaner are cards in the manager's brief template, hired under one of the four.
-11. **`git.push`, `git.merge`, `slots.round_every`, `slots.review_window_min`, `measure.done_means`.** Rules for people. The hire brief always says "no push".
-12. **A freeze without a queue.** A counted run freezes the main checkout through the resource queue (its id marks it). A project with no shared resource has no tool-visible freeze: it is kept by hand. Also, `plan_flow.py` treats a priority-0 job as counted while `office.py` and `board.py` go by the id alone; pick one.
-13. **`rq.py --max` is not enforced.** A hold past its limit reads OVERDUE; nothing ends it.
-14. **Units differ.** A bare number is seconds for `rq.py --max` and minutes for `office.py --eta`. The skills say so; one unit would be better.
-15. **The badge is a claim, not a credential.** The signing key sits beside the roster. It stops mix-ups and keeps an honest record; it does not stop a session that sets out to cheat.
+5. **The badge is a claim, not a credential.** The signing key sits beside the roster. It stops mix-ups and keeps an honest record; it does not stop a session that sets out to cheat. The same holds for `--by`: `board.py` does not check who runs an edit, so the split between what the founder and the manager may change is a rule in the skills.
+6. **`--words` is whatever is typed.** `shift set`, `milestone set --force` and `decide answer` record the words given; nothing can check they were the user's.
+7. **No push is a printed rule.** The brief says it (or "only your own branch" when the profile allows pushing); nothing stops a `git push`.
+8. **A freeze holds the tools, not git.** While a counted run or a freeze is on, the board holds its edits and the graph, plan and gym tools refuse to write in the main checkout. A plain `git commit` there is not stopped by any tool; the sweep notices and stops.
+9. **The session's model.** The brief prints the model a title should run on, and the hand-in check enforces a flagged title's commit trailer. Setting a session to that model is done in the app by the manager.
+10. **The hook cannot see everything.** `graph_readonly.py` refuses direct edits and the common shell routes to the road graph's files. `hooks/README.md` lists what it cannot see (8.3 short names and links, names built by the shell, a `cd` in an earlier call, a bare `git reset --hard`). The signed edit log catches a change the hook missed: `flow.py selftest` then says TAMPERED.
+11. **`rq.py --max` is enforced only when asked** (`--enforce-max` or `resource.enforce_max`). Otherwise a hold past its limit only reads OVERDUE. A `take` hold is never ended.
 
-## The manager still writes scratch scripts for
+## Missing
 
-16. A log entry, `now`, a rota day, a checkpoint, a blocker, the checklist, a queue entry, the research-and-review window. Each is an edit of the state through `board.write_state`. Wanted: a `board.py` command for each, and `rr` windows written from the profile.
-17. **The round.** It is two commands and an order of attention in the skill. Wanted: one `office.py round` that prints what needs the manager first, and marks hand-ins seen.
-18. **The hand-off brief** for the next manager, and the manager's timer file (`manager-timers.json`): both hand-kept; their shapes are described only in the skill.
+12. **A way to read usage.** The manager reads the plan's weekly usage in the app and records it with `board.py usage`. The round reminds it when the last reading is old.
+13. **A system graph reader.** The canvas can draw the system as built; the reader that makes that graph from a project's code is the project's own to write.
+14. **Timers are a list, not timers.** `office.py timers init` writes what the manager should create in its session; the tool creates none, and they end with the session. A timer that must survive a restart is a scheduled task the user sets.
+15. **Another harness.** `foundry-bench` and the manager's `references/app.md` describe the Claude desktop app's session tools by name. Another harness needs its own version of those two files.
 
 ## Rough edges
 
-19. `board.py` and `flow.py` read a stage's exit cell differently (the board takes full ids and runs only). The roadmap format page says what both accept.
-20. The starter roadmap is an example with a PASS row, so a new project's board warns that no lane backs it until the founder replaces the starter. `founder.py doctor` and `audit` both say the roadmap is still the starter.
-21. The map prints command lines with the host's absolute paths (so does every brief). Fine for one machine; noisy in a repository several people clone.
-22. `graph_readonly.py` matches a protected file by name in shell commands, and looks for the profile module only in `scripts/foundry` and beside itself. `hooks.protect` does not follow `paths.flow`.
-23. Decision briefs (`D<n>-topic.md`) and decision records hired with `--adr` (`NNNN-topic.md`) share `paths.decisions`.
-24. The default lane pattern and push-block pattern (`G1`, `Q1`) are one project's habits. Both are profile keys.
-25. `foundry-bench` and the manager's `references/app.md` describe the Claude desktop app's session tools by name; another harness needs its own version of those two files.
-26. The cleaner card is a temp that uses the queue, while the app notes say work that waits on the shared resource belongs to a session.
-27. `founder.py audit` lists the manager's roadmap proposals (`<paths.handoff>/<date>-proposal-<topic>.md`) by file name only; whether each was answered is the founder's to track.
-28. The example profile leaves out keys the tools read with defaults: `[skills]`, `resource.shell`, `measure.grader_no_read`, `measure.handin_check_timeout_s`, `measure.unit_manifests`, `measure.not_built`, `roadmap.late_stages`, `roadmap.block_id`, `board.phases_title`, `git.branch_prefix`, `hooks.protect_reason`. `foundry_profile.py show` prints them all.
-
-## Found in the source skills during conversion (fixed here, worth knowing)
-
-- The hand-off told every open question to cite a D-number, but no tool issued one: `board.py decide` now does.
-- A manager who posted only on its two-hour round read STALE at two hours: the skill now has it post at each block end, merge and filing.
-- The reviewer "never touches the shared resource" and the brief template let it queue a test job: now "only the one short job its brief names".
-- The grader's example brief worked in the main checkout, against the rule that no employee writes there: it works in its own worktree.
-- Three files stated the "a session cannot clear itself" rule with different scope: one statement, in `app.md`.
-- A stale note said a chained command reached the shell as its first word only: the queue passes it whole.
+16. Decision briefs (`D<n>-topic.md`) and decision records hired with `--adr` (`NNNN-topic.md`) share `paths.decisions`.
+17. The default lane pattern and push-block pattern (`G1`, `Q1`) are the source projects' habits. Both are profile keys.
+18. The queue's files keep their original key names inside (`lane` for a seat, `gui` for exclusive); `rq.py status --json` prints the new names.
+19. With two seats free, `rq.py run` may take the second and leave the first for a `take`.
+20. Briefs print commands with the host's absolute paths (the map prints them relative). Fine for one machine; a brief pasted to another machine needs its paths changed.
+21. A badge's title or model cannot be amended; it takes a new hire.
+22. With a shared resource the sweep releases and re-takes the seats for each lane. Its freeze holds the checkout throughout, but a job already waiting for the whole resource can run between two lanes.
+23. `measure.sweep`, `measure.done_means` and `git.merge` are notes for people; no tool reads them.
+24. The defaults of `measure.grader_owned` and `measure.records` are written as `gym/...`. A project that moves `paths.gym` must change those two lists with it.
+25. On Windows, when Git's `bash` is not first on the PATH, the queue can find the WSL launcher's `bash.exe` instead (it fails with "no installed distributions"). Set `resource.shell` to the shell you mean.
+26. `board.py init` and `check` ignore the starter roadmap, but two commands do not: `decide ask` numbers past the starter's example decisions, and `milestone set` on an id the starter names still takes that milestone from the starter. `milestone sync` refreshes the planned ones after the founder writes the real roadmap; one already in progress keeps its starter title until it is renamed by hand.
+27. Two independent reviews of this release found 8 High and 17 Medium defects between them; all were fixed and most fixes have a test that fails without them. A third review has not been done. The walls most worth a fresh pair of eyes are the hand-in check (`office.py handin`), the sweep's "was this lane really run" rule, and the hook's shell matching.
 
 ## The source projects
 
-The two projects these came from still run their own copies. Moving one over is a profile, not a rewrite: `badge_prefix`, `paths.office` and the roadmap id shapes keep its badges, office and roadmap valid; the queue's files are renamed (`vm.*` to `rq.*`), the lane-inputs table's `crates` key becomes `units`, and briefs name `--rq`/`--seat`. Do it at a slot boundary with nothing counted in the queue, after the test in item 1.
+Glasswing and Shiro still run their own older copies. Moving one over is mostly a profile (`badge_prefix`, `paths.office` and the roadmap id shapes keep its badges, office and roadmap valid), plus renamed queue files and flags; [Adopting](adopting.md) has the steps. Do it at a slot boundary with nothing counted in the queue, after the test in item 1.

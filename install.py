@@ -35,9 +35,9 @@ def plan(args):
     steps = []  # (src, dst)
     for f in sorted((HERE / "tools").glob("*.py")):
         steps.append((f, tools / f.name))
-    for f in sorted((HERE / "profile").glob("*")):
-        if f.is_file():
-            steps.append((f, tools / "templates" / f.name))
+    for f in sorted((HERE / "profile").rglob("*")):
+        if f.is_file() and "__pycache__" not in f.parts:
+            steps.append((f, tools / "templates" / f.relative_to(HERE / "profile")))
     if args.skills != "none":
         base = (project / ".claude" / "skills") if args.skills == "project" else (Path.home() / ".claude" / "skills")
         for f in sorted((HERE / "skills").rglob("*")):

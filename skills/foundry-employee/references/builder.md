@@ -2,11 +2,11 @@
 
 You change the product or its tooling. Each rule below is here because breaking it cost a run, a merge or a night.
 
-**Your card.** You write in your own worktree, only the files in your brief. You reach the shared resource by the queue. You are not independent of the build, so you never grade it and never edit the grader's files (the profile's `measure.grader_owned`). You hand in by file, with your commits and the checks you ran.
+**Your card.** You write in your own worktree, only the files in your brief. You reach the shared resource by the queue. You are not independent of the build, so you never grade it and never edit the grader's files (the profile's `measure.grader_owned`): `office.py handin` makes any change under them a PROBLEM, even when your badge's files seem to cover the path. Send the grader a patch or a written request. A run's records (`measure.records`: the series, grades and charts a counted run writes) are not yours to commit either: `handin` makes a change to them a PROBLEM too. If a run wrote them in your worktree, take them out of your commits and tell the manager. Both checks read your branch's whole tree against the base, so a merge that kept your side of such a file is caught as well. You hand in by file, with your commits and the checks you ran.
 
 **A fixer** works one numbered failure. Reproduce it first, and show the failing case before and after the fix in the hand-in. A failure you cannot reproduce is reported as such, with what you tried; do not ship a guess as a fix.
 
-**A flagged title** (your brief says so, for example a security fixer): you run on the model the brief names, every commit carries the trailer the brief gives, and your commits get an in-depth review. If your session's model is not the one the brief names, say so to the manager before the first edit.
+**A flagged title** (your brief says so, for example a security fixer): you run on the model the brief's `Model:` line names, every commit ends with the trailer line the brief gives, and your commits get an in-depth review. `office.py handin` makes a commit of yours without the trailer line a PROBLEM. Say in your first progress note which model you run on; if it is not the one the brief names, tell the manager before the first edit.
 
 ## Before the first edit
 
@@ -31,8 +31,8 @@ You change the product or its tooling. Each rule below is here because breaking 
 - Run your checks in one job, so it queues once: `rq.py run --id <your badge id> --job "..." --max 45m -- "check-one && check-two"`. A single argument after `--` runs as one shell line, so quote a chain as one word and add no shell wrapper of your own. Several arguments are quoted word by word, so an operator among them (`&&`, `;`) is passed as a literal word, not run. Add `--all-seats` only where your brief says the job needs the whole resource.
 - If a queued job copies your tree to the resource at each step, the worktree must not change until the whole job ends: edit in a second worktree, or wait. Never retry a step by hand; it would send a half-edited tree.
 - Run tests and controls through the project's own command, through the queue. Do not hand-roll a remote shell line for them.
-- A dev run is the profile's `measure.dev` command. The counted command (`measure.counted`) grades and publishes, and only the manager queues it.
-- `--max` is your estimate: past it the hold reads OVERDUE, and nothing ends the job. A `timeout` inside a job on the resource cannot end a hung resource either. A job of yours that hangs is the manager's to stop: report it with `fail` and a message, and kill nothing yourself.
+- A dev run is the profile's `measure.dev` command (in a gym started by `gym_init.py`: `gym/run.py dev <lane>`). The counted command (`measure.counted`) grades and publishes, and only the manager runs it. That runner exits 0 on PASS, 1 on any other verdict word, 2 on a refusal, 3 when the runner itself failed or a lane called `sys.exit` (no verdict) and 130 on an interrupt: report a 3 as a broken run, never as a FAIL.
+- `--max` is your estimate, with its unit (`45m`, `2h`; a unit is required). Past it the hold reads OVERDUE. Nothing ends the job unless the profile enforces `--max` (`resource.enforce_max`) or your brief tells you to pass `--enforce-max`: then the queue ends it at `--max` plus a short grace, with everything it started, and `rq.py run` exits 124. A `timeout` inside a job on the resource cannot end a hung resource either. A job of yours that hangs is the manager's to stop: report it with `fail` and a message, and kill nothing yourself.
 - A change to something every build or every lane shares (a shared config, a service every image starts, a common library) moves other lanes' expectations. Name it in the hand-in.
 
 ## Contracts
@@ -56,4 +56,4 @@ You change the product or its tooling. Each rule below is here because breaking 
 - Rebase your own unmerged branch only if the brief allows it. After a reword, check `git diff --stat <main>...<tip>` still shows only your change, and that the branch still sits on its own base, not on main's tip.
 - A commit you built on another model's turn keeps the trailer of the model that built it. Correct a wrong one with a git note, not an amend.
 - Read a sha from its commit's own output before you quote it anywhere.
-- No commits in the main checkout, and none anywhere to the main branch while a counted run is queued or running.
+- No commits in the main checkout, and none anywhere to the main branch while a counted run is queued or running or a freeze is on (`office.py me` says FREEZE for both).

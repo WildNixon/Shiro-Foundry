@@ -860,9 +860,39 @@ def cmd_approve(a, d, now):
 
 # --- selftest ---
 
+def remove_tree(path):
+    """Remove a temp folder and all in it. A file that is read-only (git's objects on Windows) is made writable and
+    tried once more; what still cannot go is left, never an error."""
+    import shutil
+
+    def retry(func, p, _exc):
+        try:
+            os.chmod(p, 0o700)
+            func(p)
+        except OSError:
+            pass
+
+    if sys.version_info >= (3, 12):  # onexc came with 3.12, where onerror is deprecated
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
 def selftest():
+    """Every check runs in one temp folder, which is removed at the end whether they pass or not."""
     import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="foundry-journal-selftest-"))
+    tmp = Path(tempfile.mkdtemp(prefix="foundry-journal-selftest-")).resolve()  # its real name, so paths compare
+    try:
+        code = _selftest(tmp)
+    finally:
+        remove_tree(tmp)
+    if tmp.exists():
+        print(f"FAIL the selftest left its temp folder behind: {tmp}")
+        return 1
+    return code
+
+
+def _selftest(tmp):
     state = {"shift": {"id": "test-shift", "crew_max": 3}, "rota": {"slots": office.DEFAULT_SLOTS}}
     (tmp / "state.json").write_text(json.dumps(state), encoding="utf-8")
     d = tmp / "office"

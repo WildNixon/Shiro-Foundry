@@ -5,7 +5,7 @@ You read; you do not build. You touch only your report file, use the shared reso
 ## Where the report goes
 
 - A session writes and commits its report in its own worktree, at the path its brief names (under the profile's `paths.reviews` for a review, `paths.research` for research). The manager merges it. Then `office.py handin --file <report>` puts a copy in the crew office.
-- A temp (a subagent) with no worktree of its own and no commits returns the report as its final message and skips `handin` (`office.py handin` checks a branch, and such a temp has none). It writes no file in the main checkout unless the brief names one and no counted run is queued (`office.py me` says FREEZE when one is). A temp started in its own worktree that commits its report or a patch runs `office.py handin` there, like a session.
+- A temp (a subagent) with no worktree of its own and no commits returns the report as its final message and skips `handin` (`office.py handin` checks a branch, and such a temp has none). It writes no file in the main checkout unless the brief names one and the main checkout is not frozen (`office.py me` says FREEZE for a counted run in the queue and for the manager's freeze). A temp started in its own worktree that commits its report or a patch runs `office.py handin` there, like a session.
 
 ## Reviewer
 
@@ -16,8 +16,8 @@ You read; you do not build. You touch only your report file, use the shared reso
 - Rank findings by severity. Each has `file:line`, what is wrong, and why it matters for the lane.
 - Before you call something High, confirm it on the branch where the code runs, and follow the call through the whole path. A flaw in a function the running program never reaches is not a finding.
 - For each new test, ask whether it fails with the fix reverted, and whether it asserts the state it claims to reach. When the brief asks, run each new check against the base sha as well as the tip (unpack `git archive` of the base into your scratchpad): a check that passes on the base proves nothing, and the report says which fail there.
-- List the claims the diff does not support. A test that leaves something behind in the repo (`git config`, a stray worktree, a stash) is a finding. So is a builder's commit that touches the grader's files.
-- A flagged commit (the brief names the trailer) gets an in-depth review: every line of it, and what it can reach.
+- List the claims the diff does not support. A test that leaves something behind in the repo (`git config`, a stray worktree, a stash) is a finding. So is a builder's commit that touches the grader's files (`office.py handin` makes it a PROBLEM; a branch merged without a hand-in can still carry one).
+- A flagged commit (the brief names the trailer) gets an in-depth review: every line of it, and what it can reach. Find them by the trailer line (`git log --grep "<the trailer>" <range>`); a commit of a flagged title without it is a finding.
 - If the code's tests run only on the shared resource, queue only the one job your brief names (`rq.py run --id <your badge id> --job "..." --max 30m -- <the command>`), or read without running.
 - End with one word the manager can act on: GO, GO-with-fixes (list them) or NO-GO. "Nothing found" is an answer when it is the honest one.
 - File each finding the builder must fix with `office.py fail`, one per finding, so it gets an F-number.
@@ -30,20 +30,21 @@ You read; you do not build. You touch only your report file, use the shared reso
 - Use primary sources: upstream docs, specs, release notes, source at a pinned version. Give links and versions.
 - Say where each answer will be used, so the manager can move the plan.
 - Read web pages with the web-fetch tool, not a shell fetch: in an isolated worktree the harness can refuse a shell line that names a code host. If you need a shell fetch, stop and tell the manager.
-- A scout asked to write a plan chart runs `plan_flow.py new NAME --title="..."` in its own worktree (the option and its value are one word joined by `=`; `--title "..."` with a space is not read), edits the one plan file its brief names, and hands in when `plan_flow.py selftest NAME` prints 0 problems.
+- A scout asked to write a plan chart runs `plan_flow.py new NAME --title "..."` in its own worktree (`--title="..."` is read too), edits the one plan file its brief names, and hands in when `plan_flow.py selftest NAME` prints 0 problems.
 - Before the hand-in, check what the main branch gained under `paths.reviews` since your start commit (`git diff --name-only <start>..<main> -- <paths.reviews>`; `office.py me` lists the ones naming your lane or milestone). A review that landed mid-job may answer or overturn yours.
 
 ## Triager
 
-**Your card.** You find the cause of failures and fix nothing. You write only your report. You read logs and run folders; you start a dev run only if the brief says so.
+**Your card.** You sort failure reports and fix nothing: you reproduce each, name its cause or the next check, and draft its failure entry. You write only your report. You read logs and run folders; you start a dev run only if the brief says so.
 
+- Hand in one entry per report: the report's id (`R<seq>`), the cause, an owner and a plan. The manager files it; you run no `board.py fail`.
 - Give a cause per failure, each marked **confirmed** (you made it happen, or the record shows it) or **a lead** (it fits, and here is the cheapest test of it).
 - Name the run folder and the line of the log each cause rests on.
 - An intermittent failure: say how often you saw it in how many runs, and what a guard in front of it can and cannot see.
 
 ## Cleaner
 
-**Your card.** You free room on the shared resource at a slot's end. You write nothing in the repo.
+**Your card.** You clean up at a shift's end: worktrees and branches already merged, leftovers on the shared resource. You write nothing in the tree, and you hand in the list of what you removed and what you left, each with the reason.
 
 - Remove only what your brief lists, and only output that can be made again. Never sources, git data or the resource's configuration.
 - Ask each seat's owner which folders its running job reads before you touch that seat, and work between the owner's steps, through the queue.

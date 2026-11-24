@@ -1,5 +1,7 @@
 # Writing the roadmap
 
+The starter `founder.py init` writes opens with a line `<!-- STARTER ...`: every row under it is an example, and the tools take nothing from it. Replace the rows with the project's own and take that line out.
+
 The roadmap is one file, `paths.roadmap` (`docs/ROADMAP.md` by default). People read it; the tools parse its tables. `references/roadmap-format.md` has the exact shapes and a complete small example. Read that before the first row, and run `flow.py selftest` after every edit.
 
 ## The goal
@@ -38,10 +40,11 @@ Rules that keep the map honest:
 - A milestone is done only when its lane says PASS on a counted run. MARGINAL, FAIL, VOID and STARVED are failures with a plan, not kinds of done.
 - Order comes from "Needs", and the road graph holds it (`flow.py graph`). When the roadmap's prose and the graph disagree, the graph is what the tools use; fix one of them the same day.
 - Size from evidence. After the first stage, the log says how long a block of that kind took; use it.
+- The state's milestone list follows the table. After you add or reword a milestone row, run `board.py milestone sync`: it lists a new one as planned, with the row's title and lane, and rewrites a planned one nothing has touched. `milestone sync --prune` removes a planned, untouched one whose row you took out. `flow.py selftest` and `board.py check` both say when the state lacks one.
 
 ## Decisions
 
-A decision is a question only the user can answer: a cut line, a trade between two requirements, something to buy, a risk to accept. Each has a D-number, the question, what it gates ("needed before M12"), and its state. The register is in the state (`board.py decide`); the roadmap's decisions table shows the same numbers so the graph can draw what each gates. `references/decisions.md`.
+A decision is a question only the user can answer: a cut line, a trade between two requirements, something to buy, a risk to accept. Each has a D-number, the question, what it gates ("needed before M12"), and its state. The register is in the state (`board.py decide`); the roadmap's decisions table shows the same numbers so the graph can draw what each gates. The tools keep the two in step: a row you write into the table gets its register entry with `board.py decide adopt D<n>` (`--refresh` after you reword it), a question asked with `board.py decide ask` takes the id after the highest of both, and `board.py check` warns when the table has an open decision the register lacks or the two disagree on whether one is answered. `references/decisions.md`.
 
 ## The change log
 

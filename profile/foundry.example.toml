@@ -1,6 +1,7 @@
 # .foundry/foundry.toml: this project's profile.
 # Every key is optional; what you leave out takes the default shown here.
-# `python scripts/foundry/foundry_profile.py show` prints the profile in force.
+# `python scripts/foundry/foundry_profile.py show` prints the profile in force,
+# `... where` says which file was read and whether it parsed. docs/profile.md explains every key.
 
 project = "My Project"          # as people say it
 crew = "myproject"              # short, lower case: this crew's name when lessons carry between crews
@@ -24,15 +25,15 @@ reviews = "docs/reviews"
 research = "docs/research"
 handoff = "docs/handoff"
 decisions = "docs/decisions"
-gym = "gym"                     # series/, prereg/, contracts/, charts/, grades/, lanes/
+gym = "gym"                     # run.py, lanes/, prereg/, contracts/, series/, charts/, grades/
 rules = ".foundry/rules.md"
 
 [slots]                         # the rota: when each slot starts (local time)
 day = "06:00"
 swing = "14:00"
 night = "22:00"
-round_every = "2h"              # how often the manager sets its round timer (a rule for the manager; no tool reads it)
-review_window_min = 90          # the research-and-review window the manager writes into the rota (no tool reads it)
+round_every = "2h"              # the round timer `office.py timers init` writes
+review_window_min = 90          # each slot's research-and-review window (`board.py rota slots`)
 
 [limits]                        # every number here is the user's
 usage_stop = 80                 # percent of the plan's weekly usage at which the manager stops and asks
@@ -49,20 +50,30 @@ seats_env = "FOUNDRY_SEATS"     # every seat held, for a job that takes the whol
 prepare = ""                    # a command run in the seat before each job (clean what the last holder left)
 exclusive = ""                  # a regex: jobs whose text matches never hold seats at the same time
 status = ""                     # a command that prints the resource's own health (disk, memory)
-default_max = "30m"
+default_max = "30m"             # a hold's length when --max is not given (always with a unit)
+shell = ""                      # the shell a queued command line runs in; empty: bash on PATH, else sh
+enforce_max = false             # true: a `run` job still going at its --max plus max_grace is ended (exit 124)
+max_grace = "2m"
 
-[measure]                       # how "done" is decided
+[measure]                       # how "done" is decided: the gym (`gym_init.py init` scaffolds one)
 done_means = "the milestone's gym lane says PASS"
-lane_pattern = '\bG\d+\b'       # how a lane's name looks in text
-counted = ""                    # the command of a counted run, with <lane>; e.g. "python gym/run.py counted <lane>"
-dev = ""                        # the command of a dev (uncounted) run
-sweep = ""                      # the command that runs every lane, if there is one
-selftest = ""                   # the gym's own selftest
-grader_owned = ["gym/prereg", "gym/lanes", "gym/run.py"]   # only a grader writes these
+lane_pattern = '\bG(?:X\d+[a-z]?|L\d+|\d+)\b'   # how a lane's name looks in text: G1, G12, GX3, GL2
+counted = ""                    # a counted run, with <lane>: "python gym/run.py counted <lane>"
+dev = ""                        # a dev (uncounted) run:      "python gym/run.py dev <lane>"
+selftest = ""                   # the gym's own selftest:     "python gym/run.py selftest"
+sweep = ""                      # a note for people: how this project sweeps every lane (sweep.py run does it)
+sweep_skip = []                 # globs sweep.py leaves out of its "did the tree move" check
+no_verdict_exits = [2, 3]       # exit codes of the counted command that mean "no verdict" (sweep.py)
+grader_owned = ["gym/prereg", "gym/lanes", "gym/run.py", "gym/gym_kit.py"]
+                                # only a grader's commits may change these
+grader_no_read = []             # paths a grader never opens (the builder's code)
 records = ["gym/series", "gym/charts", "gym/grades"]       # a run's records
 handin_check = ""               # a command office.py handin runs when a branch changes handin_check_paths
 handin_check_paths = []         # globs, e.g. ["src/**"]
+handin_check_timeout_s = 900
 vendored_paths = []             # globs a badge should not own without saying so
+unit_manifests = []             # lanes_for.py: globs of the build units' manifest files
+not_built = ["tests/", "benches/", "examples/", "*.md"]    # lanes_for.py: paths that move no lane
 
 [roadmap]                       # the shape of ROADMAP.md's ids
 requirement_id = '[A-Z0-9]+-\d+'
@@ -71,17 +82,40 @@ stage_id = 'R\d'
 milestone_id = 'M\d+'
 decision_id = 'D\d+'
 goal = "1.0"                    # what the road leads to, as the pages say it
+late_stages = []                # named stages between the numbered ones and the goal, e.g. ["Beta"]
+block_id = '[QP]\d+[a-z]?'      # how a push block's title opens on the map: Q1, P2a
+
+[board]
+phases_title = "Phases"         # the heading over state.phases
+absolute_commands = false       # true: the map prints tool commands with absolute paths
 
 [git]
-push = false                    # a rule the skills follow: the crew never pushes unless this is true (no tool enforces it)
-merge = "cherry-pick by commit"
+push = false                    # the brief says "no push" unless this is true (then: only your own branch)
+merge = "cherry-pick by commit" # a rule for the manager
 worktrees = ".claude/worktrees"
+branch_prefix = "claude/"
 
-[models]                        # title -> model id; a title left out runs on the session's own model
+[skills]                        # the skill names briefs and timers use
+founder = "foundry-founder"
+manager = "foundry-manager"
+employee = "foundry-employee"
+flow = "foundry-flow"
+bench = "foundry-bench"
+gym = "gym"
+
+# title or role -> model id, printed into the brief; left out: the session's own.
+# (Uncomment the header with its lines: a table may be declared only once in the file.)
+# [models]
 # builder = "claude-opus-5-5"
 # reviewer = "claude-sonnet-5-5"
 
-# A title whose work gets a heavy review: its sessions run on this model and its commits carry the trailer.
+# An extra hire card. `like` names a built-in card: builder, fixer, grader, reviewer, scout, triager, cleaner.
+# [titles.security-fixer]
+# like = "fixer"
+# does = "One numbered security failure, reproduced first"
+
+# A title whose work gets a heavy review: the brief names this model and trailer, and `office.py handin`
+# sends back a commit of that badge without the trailer.
 # [flagged.security-fixer]
 # model = "claude-opus-5-5"
 # trailer = "Built-by: claude-opus-5-5 (security fix; heavy review)"
@@ -89,7 +123,8 @@ worktrees = ".claude/worktrees"
 # Other crews that work this way. A lesson this crew's journal marks `carry --to other` reaches their outbox,
 # and `journal.py take` reads theirs from the path named here.
 # [crews.other]
-# lessons = "D:/other-project/out/foundry/journal/carry-myproject.jsonl"
+# lessons = "../other-project/out/foundry/journal/carry-myproject.jsonl"
 
 [hooks]
-protect = ["docs/flow/road.graph.json", "docs/flow/road.edits.jsonl"]   # files only a tool may write
+# protect = ["docs/flow/road.graph.json", "docs/flow/road.edits.jsonl"]   # default: the two road graph files under paths.flow
+protect_reason = ""             # text that replaces the hook's refusal message

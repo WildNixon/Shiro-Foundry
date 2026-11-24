@@ -27,37 +27,120 @@
                              file the next D<n> in state.decisions (a question only the user answers), rebuild
     python board.py decide answer D7 --words "the user's own words"    record the answer (empty words are refused)
     python board.py decide withdraw D7 --note "text"                   the question no longer needs an answer
+    python board.py decide adopt D2 [--by MGR-1] [--needed-before M3]
+                             a register entry for a decision the roadmap's table already names, under the same
+                             id: the question from its row, answered where the roadmap says Decided, else open
+                             (refused, exit 2, when the register has the id or the roadmap does not). `decide
+                             ask` takes the id after the highest of the register and the roadmap together (the
+                             ids are the profile's roadmap.decision_id; --id <id> names one where that is not a
+                             prefix and a number)
+    python board.py decide adopt D2 --refresh
+                             read an adopted entry again from the roadmap's row: only one adopted by `roadmap`
+                             itself (init, or adopt with no --by) that nobody answered or withdrew here. `decide
+                             withdraw` also takes an answered entry adopted from a roadmap that no longer names it
     python board.py decide list [--open]       the register, newest first; writes nothing
-    python board.py pending  the edits held while a counted run was in the resource queue; writes nothing
+    python board.py log add --by MGR-1 --title "text" [--slot day] [--done "a | b"] [--not-done "a | b"]
+                             [--verdicts "G1 PASS | G2 FAIL"] [--commits a,b] [--next "text"]
+                             [--crew-file crew.json | --crew "a | b"]
+                             a log entry at the top of state.log, dated from the clock; --crew-file takes the
+                             JSON list office.py end-shift --out wrote
+    python board.py now [--headline "text"] [--position "text"] [--tree <sha>|auto]
+                             set Now (at least one of the three). --tree auto is the last commit on this
+                             branch that is not only records (the map's files, reports, notes, run records)
+    python board.py rota set --date 2030-01-02 --slot day [--shift ID] [--manager MGR-2] [--ends 16:00]
+                             [--note "text"]      write or update that day's slot entry (an empty --ends or
+                             --note takes the key out)
+    python board.py rota slots [--rr-min 90]
+                             write each slot's research-and-review window from its start (default: the
+                             profile's slots.review_window_min), and set rota.rr_since to now when it is
+                             missing: the check holds every later slot to its window
+    python board.py checkpoint add --lane G1 --milestone M1 [--builder EMP-3] [--grader EMP-4] [--note "text"]
+                             [--block 3]          a gym checkpoint (and "checkpoint": G1 on block 3 of the
+                             shift); a grader who is the builder is refused
+    python board.py checkpoint set G1 [--builder ID] [--grader ID] [--note "text"]
+    python board.py blocker add --what "text" --owner "the user" [--needs D7] [--shift ID]
+                             a blocker; standing unless --shift ties it to a shift (promote drops it then)
+    python board.py blocker rm 2|"start of its text" --note "text" [--by MGR-1]
+                             remove it; what it was and the note go to state.notes
+    python board.py checklist add "text" | done 2 | rm 2 | reset
+                             the list the next manager walks: add a line, tick one, remove one, clear the ticks
+    python board.py shift set [--crew-max 4] [--heavy-ok yes|no] [--milestone M1] [--when "text"] --by MGR-1
+                             --words "the user's own words"
+                             the current shift. crew_max and heavy_ok are the user's numbers: --words is
+                             required with them, and is appended to the shift's `when` with the time
+    python board.py shift blocks --file blocks.json
+                             replace the current shift's blocks with a JSON list, before its work begins
+                             (refused once a block is done, skipped, partial or in progress)
+    python board.py queue add --file shift.json [--at 1] | rm ID --note "text" | move ID 1 | list
+                             the later shifts. A queued shift has id, title, crew_max and blocks (each with a
+                             title); ids are unique across the shift and the queue; place 1 is promoted next.
+                             list writes nothing
+    python board.py milestone set M1 --status done|partial|in-progress|planned [--note "text"]
+                             [--force --words "the user's own words"] [--title "text" --lane G1]
+                             a milestone's status. done is refused unless its lane (its own, its
+                             checkpoint's, or its state.lanes row) has PASS as its latest counted verdict in
+                             the gym's series; --force records the user's override. --title and --lane add a
+                             milestone the list does not have yet; for one it has, another --lane is refused
+                             (exit 3) unless --force --words records the change (`forced` keeps `lane_was`)
+    python board.py milestone sync [--prune]
+                             add every milestone the roadmap's tables name and the state lacks (planned, the
+                             roadmap's title and lane), and rewrite the title and lane of a planned one nothing
+                             has touched (no note, checkpoint, forced record, shift or log entry) from its row.
+                             --prune removes the planned, untouched ones the roadmap no longer names. `init` adds
+                             the roadmap's milestones and decisions when a roadmap is there, unless it is still
+                             the starter founder.py wrote (first line <!-- STARTER); `milestone set` of a new id
+                             the roadmap names adds the others too
+    python board.py pending  the edits held while the main checkout was frozen; writes nothing
     python board.py stamp    the time now, as state.json writes it (use it instead of calling `date`
                              from a script, so every stamp has the same form and zone)
     python board.py selftest pure checks on made-up inputs (the tree check's record files, stale roadmap
-                             run ids, a project with no state, gym or roadmap, init, the decisions register);
+                             run ids, a project with no state, gym or roadmap, init, the decisions register,
+                             the edit commands, the freeze marker, a stage's exit cell, printed commands);
                              reads and writes nothing outside a temp folder
 
+Exit codes of an edit command: 0 written (or held, see below), 2 the command cannot be read or names something
+the state does not have, 3 a rule refuses it (a linked worktree, a milestone done whose lane has not passed, a
+grader who is the builder, blocks replaced after work began), 4 held under a hold that looks dead, 5 not held
+(the office's lock was busy: run it again).
+
 While a counted sweep or a single counted run holds or waits for the shared resource (a queue id <badge>-sweep,
-or <badge>-counted[-<lane>]), nothing in the main checkout may change: a counted run samples the tree, and a
-change under it, tracked or not, voids the run. So in the main checkout, during either: build and check print
-but do not rewrite the map, init and promote are refused, and note, usage, block, fail, rr and decide are
-checked, then held in the office's pending-state.jsonl and applied with their own times by the next writing
-command run in the main checkout after the run (exit 0: held). A run in a worktree neither holds nor applies:
-the held edits are the main checkout's. A counted run whose hold is past its own limit is probably dead (the
-host restarted): edits are still held, but they exit 4 and say DEAD?, until the manager frees the lock with
-rq.py force-release. A project with no shared resource (resource.name empty) has no queue, so nothing is held.
+or <badge>-counted[-<lane>]), or while the office's freeze marker is on (office.py freeze on: freeze.json in the
+office, how a project with no shared resource marks a counted run), nothing in the main checkout may change: a
+counted run samples the tree, and a change under it, tracked or not, voids the run. So in the main checkout,
+during either: build and check print but do not rewrite the map, init and promote are refused, and every edit
+command (note, usage, block, fail, rr, decide, log, now, rota, checkpoint, blocker, checklist, shift, queue,
+milestone) is checked, then held in the office's pending-state.jsonl and applied with its own time by the next
+writing command run in the main checkout after the run (exit 0: held). A held edit keeps the JSON of a --file it
+was given, the commit `--tree auto` meant, and the item a number named (`blocker rm 2`, `checklist done 2`, `block 3
+done`, `checkpoint add --block 3`, `queue move ID 2`, `queue add --at 2`: the number is read against the state as it
+is written, the one the check prints, and kept as the blocker's or line's text, the block's title, the queued
+shift's id). It is checked against the state as it will be after the edits already held, and at the replay it finds
+its item again; one whose item is gone, or cannot be told from another, stays in the file with the reason while the
+later ones are applied. Every held edit has an id, and the state keeps the id of the last one replayed (`_applied`),
+so a replay cut short between the two writes never applies an edit twice. A run in a worktree neither holds nor applies: the held edits are
+the main checkout's. A counted run whose hold is past its own limit, or a freeze past its own, is probably dead
+(the host restarted): edits are still held, but they exit 4 and say DEAD?, until the manager frees the lock with
+rq.py force-release or ends the freeze with office.py freeze off. A project with no shared resource
+(resource.name empty) has no queue; only the freeze marker holds its edits.
 
 The hand-edited part is the state (Now, the shift plan, the queue of later shifts, blockers, the block log,
 milestone and phase statuses, the rota, gym checkpoints, failures, notes, the research-and-review results each
-rota slot's window produces, and the decisions that wait on the user).
+rota slot's window produces, and the decisions that wait on the user); the edit commands above write it, and
+write_state is its one writer.
 Lane facts (verdict, n, run id, date) are read from the gym's series files and never typed in; the crew (who
 is on the clock, their job, % and approximate finish) is read from the crew office (office.py); the road to
-the goal (each requirement's status, the release stages) is read from the tables of the roadmap. The builder
+the goal (each requirement's status, the release stages) is read from the tables of the roadmap, a stage's exit
+cell by flow.py's own reader (full IDs, runs, short lists, "every P0", late stages and the goal row). The builder
 warns when they disagree, so a stale map announces itself. A project with no gym folder, no roadmap or no
 state yet still gets a map and a brief: each missing input is one line under Needs attention.
-Every path, name and limit comes from the project profile (foundry_profile.py). Standard library only (the
-badge plates are drawn by office.py); no network; only the state and the map are written.
+Every path, name and limit comes from the project profile (foundry_profile.py). The map and the check print
+tool commands relative to the checkout (python <paths.tools>/board.py; the profile's commands.python when it is
+set); board.absolute_commands = true prints the host's absolute paths. Standard library only (the badge plates
+are drawn by office.py); no network; only the state and the map are written.
 """
 
 import contextlib
+import copy
 import datetime as dt
 import hashlib
 import html
@@ -94,7 +177,21 @@ ROADMAP = P.local("roadmap")
 GYM = P.local("gym")
 # the same places as the project writes them, for messages, git pathspecs and the page's text
 STATE_REL, MAP_REL, ROADMAP_REL, GYM_REL = P.rel("state"), P.rel("map"), P.rel("roadmap"), P.rel("gym").rstrip("/")
-BOARD, OFFICE, RQ = P.tool("board.py"), P.tool("office.py"), P.tool("rq.py")  # command lines, as printed
+
+
+def tool_line(name):
+    """A tool's command line as the map and the check print it: relative to the checkout (`python <paths.tools>/
+    board.py`, with the profile's commands.python only when it is set), so the map reads the same in every clone.
+    board.absolute_commands = true prints the host's absolute paths, as a brief does."""
+    if P.get("board.absolute_commands", False):
+        return P.tool(name)
+    py = str(P.get("commands.python") or "").replace("\\", "/") or "python"
+    path = f"{P.rel('tools').rstrip('/')}/{name}"
+    return " ".join(f'"{x}"' if " " in x else x for x in (py, path))
+
+
+BOARD, OFFICE, RQ = tool_line("board.py"), tool_line("office.py"), tool_line("rq.py")  # command lines, as printed
+OFFICE_ABS = P.tool("office.py")  # for a refusal read in another checkout: the main checkout's own office.py
 PROJECT = P.project
 GOAL = str(P.get("roadmap.goal") or "the goal")          # the road to <goal>
 TIERS = tuple(P.get("roadmap.tiers") or ("P0", "P1", "P2"))
@@ -164,8 +261,60 @@ BLOCK_STATUSES = ("done", "partial", "skipped", "in-progress", "pending", "block
 EDIT_OPTS = {"note": ("by",), "usage": ("stop", "reset"), "block": ("note",),
              "fail": ("what", "lane", "run-id", "verdict", "plan", "owner", "status", "from"),
              "rr": ("kind", "by", "topic", "report", "commit", "finding", "action", "slot", "date"),
-             "decide": ("by", "question", "options", "recommend", "needed-before", "brief", "words", "note")}
+             "decide": ("by", "question", "options", "recommend", "needed-before", "brief", "words", "note", "id"),
+             "log": ("by", "title", "slot", "done", "not-done", "verdicts", "commits", "next", "crew-file", "crew"),
+             "now": ("headline", "position", "tree"),
+             "rota": ("date", "slot", "shift", "manager", "ends", "note", "rr-min"),
+             "checkpoint": ("lane", "milestone", "builder", "grader", "note", "block"),
+             "blocker": ("what", "owner", "needs", "shift", "note", "by"),
+             "checklist": (),
+             "shift": ("crew-max", "heavy-ok", "milestone", "when", "by", "words", "file"),
+             "queue": ("file", "at", "note", "by"),
+             "milestone": ("status", "note", "words", "title", "lane")}
+EDIT_FLAGS = {"milestone": ("force", "prune"), "decide": ("refresh",)}  # options that take no value
 EDITS = tuple(EDIT_OPTS)  # the state edits a command line makes, held during a counted run like note
+FILE_OPTS = ("--file", "--crew-file")  # options whose value is a JSON file (or the JSON itself, as a held edit keeps it)
+MILESTONE_STATUSES = ("done", "partial", "in-progress", "planned")
+# each form of the newer edit commands: (command, verb or None) -> the options it takes, and its usage line
+EDIT_FORMS = {
+    ("log", "add"): (("by", "title", "slot", "done", "not-done", "verdicts", "commits", "next", "crew-file", "crew"),
+                     'log add --by <badge id> --title "text" [--slot <slot id>] [--done "a | b"] [--not-done "a | b"] '
+                     '[--verdicts "G1 PASS | G2 FAIL"] [--commits a,b] [--next "text"] [--crew-file crew.json | --crew "a | b"]'),
+    ("now", None): (("headline", "position", "tree"), 'now [--headline "text"] [--position "text"] [--tree <sha>|auto]'),
+    ("rota", "set"): (("date", "slot", "shift", "manager", "ends", "note"),
+                      'rota set --date YYYY-MM-DD --slot <slot id> [--shift <shift id>] [--manager MGR-n] [--ends HH:MM] '
+                      '[--note "text"]'),
+    ("rota", "slots"): (("rr-min",), "rota slots [--rr-min <minutes>]"),
+    ("checkpoint", "add"): (("lane", "milestone", "builder", "grader", "note", "block"),
+                            'checkpoint add --lane L --milestone M [--builder <badge id>] [--grader <badge id>] '
+                            '[--note "text"] [--block <n>]'),
+    ("checkpoint", "set"): (("builder", "grader", "note"),
+                            'checkpoint set L [--builder <badge id>] [--grader <badge id>] [--note "text"]'),
+    ("blocker", "add"): (("what", "owner", "needs", "shift"),
+                         'blocker add --what "text" --owner "text" [--needs D7] [--shift <shift id>]'),
+    ("blocker", "rm"): (("note", "by"), 'blocker rm <n>|<start of its text> --note "text" [--by <badge id>]'),
+    ("checklist", "add"): ((), 'checklist add [--] "text"'),
+    ("checklist", "done"): ((), "checklist done <n>"),
+    ("checklist", "rm"): ((), "checklist rm <n>"),
+    ("checklist", "reset"): ((), "checklist reset"),
+    ("shift", "set"): (("crew-max", "heavy-ok", "milestone", "when", "by", "words"),
+                       'shift set [--crew-max <n>] [--heavy-ok yes|no] [--milestone M] [--when "text"] --by <badge id> '
+                       '--words "the user\'s own words" (--words is required with --crew-max and --heavy-ok)'),
+    ("shift", "blocks"): (("file",), "shift blocks --file blocks.json"),
+    ("queue", "add"): (("file", "at"), "queue add --file shift.json [--at <n>]"),
+    ("queue", "rm"): (("note", "by"), 'queue rm <shift id> --note "text" [--by <badge id>]'),
+    ("queue", "move"): ((), "queue move <shift id> <n>"),
+    ("milestone", "set"): (("status", "note", "words", "title", "lane", "force"),
+                           "milestone set M --status " + "|".join(MILESTONE_STATUSES) + ' [--note "text"] '
+                           '[--force --words "the user\'s own words"] [--title "text" --lane L for a new milestone]'),
+    ("milestone", "sync"): (("prune",), "milestone sync [--prune]"),
+}
+
+
+def usage_of(cmd):
+    """The usage text of one of the newer edit commands: every form it has, one per line."""
+    return "usage: " + "\n       ".join("board.py " + line for (c, _), (_, line) in EDIT_FORMS.items() if c == cmd) + (
+        "\n       board.py queue list" if cmd == "queue" else "")
 FAIL_STATUSES = ("open", "planned", "fixed", "dropped")
 DECISION_STATUSES = ("open", "answered", "withdrawn")
 # rq.py's rules, copied (the map reads its files, never imports it): a waiter silent this long has left the
@@ -281,7 +430,7 @@ def counted_checkout():
 def worktree_write_refusal(cmd, root, main, targets):
     """A linked worktree's board.py writes its own copies of the state and the map (ROOT is the script's checkout),
     and a later commit on that branch would carry an older map into main. So a writing command there (build, check,
-    open, init, promote, note, fail, rr, usage, block, decide) is refused when it would write inside that worktree:
+    open, init, promote and every edit command) is refused when it would write inside that worktree:
     only the crew office's checkout, the main one, writes the map. A target moved outside the worktree
     (FOUNDRY_PATHS_STATE, FOUNDRY_PATHS_MAP: a scratch copy) is not refused. The reason text, or None to go on."""
     root, main = Path(root).resolve(), Path(main).resolve()
@@ -298,7 +447,7 @@ def worktree_write_refusal(cmd, root, main, targets):
     return (f"this is a linked worktree ({root.as_posix()}), not the main checkout ({main.as_posix()}): "
             f"board.py {cmd} would write {' and '.join(inside)} here, and a later commit could carry them. "
             "Only the main checkout's board.py writes the map. An employee reports with office.py progress or office.py fail "
-            f"(the main checkout's: {OFFICE}, which writes only the crew office); here, board.py check --no-build "
+            f"(the main checkout's: {OFFICE_ABS}, which writes only the crew office); here, board.py check --no-build "
             "reads and writes nothing")
 
 
@@ -360,15 +509,181 @@ def unmarked_hold():
         return []
 
 
+FREEZE_KEYS = ("on", "by", "why", "lane", "at", "max_s", "stale")
+FREEZE_OFF = {"on": False, "by": None, "why": "", "lane": None, "at": None, "max_s": None, "stale": False}
+# office.py's bounds for a freeze's numbers (its own when it has them): `at` is seconds between 2000 and 2100, not
+# milliseconds; no freeze is meant to last past a year
+FREEZE_AT_MIN = float(getattr(office, "FREEZE_AT_MIN", 946684800.0))
+FREEZE_AT_MAX = float(getattr(office, "FREEZE_AT_MAX", 4102444800.0))
+FREEZE_MAX_S = int(getattr(office, "FREEZE_MAX_S", 366 * 86400))
+
+
+def freeze_sane(at, max_s):
+    """(at, max_s) of a freeze as numbers a clock can show, by office.freeze_facts's own rule, or a ValueError,
+    TypeError or OverflowError saying what is wrong: `at` is epoch seconds between 2000 and 2100 (milliseconds, nan
+    and the infinities are not), and `max_s`, when there is one, is 0 to a year of seconds."""
+    if isinstance(at, bool) or not isinstance(at, (int, float, str)):
+        raise TypeError("at is not a number")
+    at = float(at)
+    if not FREEZE_AT_MIN <= at <= FREEZE_AT_MAX:  # nan and the infinities fail this too
+        raise ValueError("at is not a time in seconds")
+    local_dt(at)  # a time this system cannot show is not a sane time
+    if max_s is not None:
+        if isinstance(max_s, bool) or not isinstance(max_s, (int, float, str)):
+            raise TypeError("max_s is not a number")
+        max_s = float(max_s)
+        if not 0 <= max_s <= FREEZE_MAX_S:
+            raise ValueError("max_s is not a sane length")
+        max_s = int(max_s)
+    return at, max_s
+
+
+def freeze_unknown(e, name="freeze.json"):
+    """The freeze a marker that cannot be read, or whose numbers are not sane, stands for: on, by "unknown", the
+    reason in `why`. A tool that cannot tell holds still."""
+    return {**FREEZE_OFF, "on": True, "by": "unknown",
+            "why": f"{name} cannot be read ({type(e).__name__}: {str(e)[:80]}): the manager sets it again or lifts it"}
+
+
+def read_freeze(d, now):
+    """The office's freeze marker (<office>/freeze.json: {"by", "why", "lane", "at", "max_s"}; no file = off) as
+    {"on", "by", "why", "lane", "at", "max_s", "stale"}, by office.freeze_facts's own rules: `at` is epoch seconds,
+    a freeze past at + max_s is stale (one with no limit never is), and a file that is there and cannot be read, or
+    whose `at` or `max_s` is not a sane number (milliseconds, 1e999, a list), is a freeze in force by "unknown", the
+    reason in `why`: a tool that cannot tell holds still. The reader used when office.py has no freeze_facts of its
+    own. It never raises."""
+    f = Path(d) / "freeze.json"
+    try:
+        if not f.exists():
+            return dict(FREEZE_OFF)
+        j = json.loads(f.read_text(encoding="utf-8"))
+        if not isinstance(j, dict):
+            raise ValueError("not an object")
+        at, max_s = freeze_sane(j["at"], j.get("max_s"))
+        return {"on": True, "by": str(j.get("by") or "unknown"), "why": str(j.get("why") or ""),
+                "lane": (str(j["lane"]) if j.get("lane") else None), "at": at, "max_s": max_s,
+                "stale": bool(max_s is not None and now > at + max_s)}
+    except (OSError, ValueError, KeyError, TypeError, OverflowError, RecursionError) as e:
+        return freeze_unknown(e, f.name)
+
+
+def freeze_facts(now=None):
+    """The freeze on the main checkout as the office keeps it (office.py freeze on|off), in read_freeze's shape.
+    office.freeze_facts answers when the office has it; else, or when it cannot, the file is read here with the
+    same meaning. A freeze needs no shared resource: it is how a project without a queue marks a counted run. An
+    answer that says on with a time no clock can show is read as a freeze by "unknown" (freeze_sane), whichever
+    reader gave it."""
+    now = office.now_ts() if now is None else now
+    try:
+        d = office.office_dir()
+    except Exception:
+        return dict(FREEZE_OFF)
+    fn = getattr(office, "freeze_facts", None)
+    if callable(fn):
+        try:
+            got = fn(d, now)
+            if isinstance(got, dict) and "on" in got:
+                fz = {**FREEZE_OFF, **{k: got.get(k) for k in FREEZE_KEYS if k in got}, "on": bool(got["on"]),
+                      "stale": bool(got.get("stale"))}
+                if fz["on"] and (fz["at"] is not None or fz["max_s"] is not None):
+                    try:
+                        fz["at"], fz["max_s"] = freeze_sane(fz["at"], fz["max_s"])
+                    except (ValueError, TypeError, OverflowError, OSError) as e:
+                        return freeze_unknown(e)
+                return fz
+        except Exception:
+            pass
+    return read_freeze(d, now)
+
+
+def freeze_text(fz):
+    """'MGR-2 froze the main checkout at 14:05 for G1: a counted run by hand', with DEAD? on a stale one. Every
+    time in it is formatted under a guard: a marker with a number no clock can show still gets its line."""
+    since = limit = ""
+    try:
+        if number(fz.get("at")) is not None:
+            since = f" at {local_dt(fz['at']):%H:%M}"
+    except (OSError, OverflowError, ValueError, TypeError):
+        since = ""
+    try:
+        if fz.get("max_s") and number(fz.get("max_s")) is not None:
+            limit = f" of {int(fz['max_s']) // 60} min"
+    except (OverflowError, ValueError, TypeError):
+        limit = ""
+    return (f"{fz.get('by') or 'unknown'} froze the main checkout{since}"
+            + (f" for {fz['lane']}" if fz.get("lane") else "") + (f": {fz['why']}" if fz.get("why") else "")
+            + (f" (DEAD? it is past its limit{limit})" if fz.get("stale") else ""))
+
+
+def freeze_hold():
+    """The freeze as one record in sweep_hold's shape ({"id", "text", "dead", "freeze"}), in the main checkout; []
+    anywhere else, and [] when no freeze is on. A freeze that is on holds edits exactly like a counted run in the
+    queue; a marker that could not be read at all holds them too, by "unknown"."""
+    try:
+        if not counted_checkout():
+            return []
+    except Exception:
+        return []
+    try:
+        fz = freeze_facts()
+        return ([{"id": "freeze", "text": freeze_text(fz), "dead": bool(fz.get("stale")), "freeze": True}]
+                if fz.get("on") else [])
+    except Exception as e:
+        print(f"board.py: the freeze marker could not be read ({type(e).__name__}: {e}); holding still as if one "
+              "is on", file=sys.stderr)
+        return [{"id": "freeze", "text": freeze_text(freeze_unknown(e)), "dead": False, "freeze": True}]
+
+
+def counted_holds():
+    """Everything that freezes the main checkout now: counted runs in the resource queue, then the freeze marker."""
+    return sweep_hold() + freeze_hold()
+
+
+def hold_why(holds):
+    """The sentence an edit, a build or a refusal prints while the main checkout is frozen, and whether every hold
+    looks dead."""
+    dead = all(r["dead"] for r in holds)
+    runs = [r for r in holds if not r.get("freeze")]
+    frz = [r for r in holds if r.get("freeze")]
+    what = " and ".join(x for x in (
+        f"a counted sweep is in the resource queue ({', '.join(r['text'] for r in runs)})" if runs else "",
+        f"the main checkout is frozen ({frz[0]['text']})" if frz else "") if x)
+    why = f"{what}: nothing in this checkout may change until it ends"
+    if dead and runs:
+        why += (f"; it looks DEAD (did the host restart?): check {RQ} status, and if no sweep is running, the manager "
+                f"frees its seats with {RQ} force-release")
+    if dead and frz:
+        why += f"; the freeze looks DEAD: if no counted run is going, the manager ends it with {OFFICE} freeze off"
+    return why, dead
+
+
 def pending_file():
     return office.office_dir() / "pending-state.jsonl"
 
 
+UNREADABLE = "not a held edit: the line cannot be read; it is kept as it is and skipped (settle it by hand)"
+
+
 def read_pending():
+    """The held edits, one per line of the pending file. A line that is not a held edit (not JSON, not an object,
+    no argv list) never stops the others: it comes back as {"_raw": the line, "failed": why}, so every reader
+    skips it as a failed one, and write_pending writes the line back as it was."""
     try:
-        return [json.loads(l) for l in pending_file().read_text(encoding="utf-8").splitlines() if l.strip()]
+        lines = pending_file().read_text(encoding="utf-8").splitlines()
     except (OSError, ValueError):
         return []
+    out = []
+    for l in lines:
+        if not l.strip():
+            continue
+        try:
+            h = json.loads(l)
+        except ValueError:
+            h = None
+        if not isinstance(h, dict) or not isinstance(h.get("argv"), list) or "_raw" in h:
+            h = {"_raw": l, "failed": UNREADABLE}
+        out.append(h)
+    return out
 
 
 def write_pending(held):
@@ -377,31 +692,233 @@ def write_pending(held):
         f.unlink(missing_ok=True)
         return
     tmp = f.with_suffix(".tmp")
-    tmp.write_text("".join(json.dumps(h, ensure_ascii=False) + "\n" for h in held), encoding="utf-8", newline="\n")
+    tmp.write_text("".join((h["_raw"] if "_raw" in h else json.dumps(h, ensure_ascii=False)) + "\n" for h in held),
+                   encoding="utf-8", newline="\n")
     os.replace(tmp, f)
 
 
+def held_id(now=None):
+    """A new id for a held edit: the time it was held and eight random hex digits, unique across the file."""
+    now = now or dt.datetime.now().astimezone()
+    return f"{now:%Y%m%dT%H%M%S}-{os.urandom(4).hex()}"
+
+
+REF_WORDS = {"blocker": "blocker", "checklist": "checklist line", "block": "block of the shift",
+             "queue": "queued shift", "queue-at": "queued shift"}
+
+
+def split_argv(argv):
+    """An edit's command line as edit_state reads it: the indexes of its positional arguments, and of each
+    option's value ({"block": 7})."""
+    cmd, pos, opts, i = argv[0], [], {}, 1
+    while i < len(argv):
+        a = str(argv[i])
+        if a == "--":
+            pos += range(i + 1, len(argv))
+            break
+        if a.startswith("--"):
+            if a[2:] in EDIT_FLAGS.get(cmd, ()):
+                i += 1
+                continue
+            if i + 1 < len(argv):
+                opts[a[2:]] = i + 1
+            i += 2
+            continue
+        pos.append(i)
+        i += 1
+    return pos, opts
+
+
+def ref_slot(argv):
+    """(kind, index into argv) of the argument of an edit that names an item by its number in a list (`blocker rm
+    2`, `checklist done|rm 2`, `block 3 done`, `checkpoint add --block 3`, `queue move ID 2`, `queue add --at 2`), or
+    None for an edit that has none."""
+    if not argv:
+        return None
+    pos, opts = split_argv(argv)
+    cmd, verb = argv[0], (str(argv[pos[0]]) if pos else "")
+    if cmd == "blocker" and verb == "rm" and len(pos) == 2:
+        return "blocker", pos[1]
+    if cmd == "checklist" and verb in ("done", "rm") and len(pos) == 2:
+        return "checklist", pos[1]
+    if cmd == "block" and len(pos) == 2:
+        return "block", pos[0]
+    if cmd == "checkpoint" and verb == "add" and "block" in opts:
+        return "block", opts["block"]
+    if cmd == "queue" and verb == "move" and len(pos) == 3:
+        return "queue", pos[2]
+    if cmd == "queue" and verb == "add" and "at" in opts:
+        return "queue-at", opts["at"]
+    return None
+
+
+def ref_names(kind, state):
+    """What each item of the list a number points into is known by, in the list's order: a blocker's text, a
+    checklist line's text, a block's title (its time when it has no title), a queued shift's id."""
+    if kind == "blocker":
+        items, name = state.get("blockers"), lambda b: b.get("what", "") if isinstance(b, dict) else b
+    elif kind == "checklist":
+        items, name = state.get("checklist"), lambda c: check_item(c)[0]
+    elif kind == "block":
+        shift = state.get("shift") if isinstance(state.get("shift"), dict) else {}
+        items, name = shift.get("blocks"), lambda b: (b.get("title") or b.get("time") or "") if isinstance(b, dict) else ""
+    else:
+        items, name = state.get("queue"), lambda q: (q.get("id") or "") if isinstance(q, dict) else ""
+    return [str(name(x)) for x in items] if isinstance(items, list) else []
+
+
+def held_ref(argv, disk, sim):
+    """(ref, None) for an edit about to be held, or (None, why) when it cannot be held. A number in it (ref_slot)
+    is read against the state as it is written (`disk`: the list board.py check prints during the freeze) and kept
+    as the item's identity: {"kind", "arg": the argument's index in argv, "key": the text, title or id}. A
+    blocker named by the start of its text is found in the state as it will be (`sim`) and kept by its whole
+    text. `queue add --at` past the last place keeps key None: the end, wherever that is at replay. (None, None)
+    for an edit with no such argument, and for one edit_state itself will refuse."""
+    slot = ref_slot(argv)
+    if slot is None:
+        return None, None
+    kind, i = slot
+    arg = str(argv[i])
+    if not re.fullmatch(r"[0-9]+", arg):
+        if kind != "blocker":
+            return None, None
+        hits = [n for n in ref_names(kind, sim) if n.casefold().startswith(arg.casefold())]
+        return ({"kind": kind, "arg": i, "key": hits[0]}, None) if len(hits) == 1 else (None, None)
+    names, n = ref_names(kind, disk), int(arg)
+    word = REF_WORDS[kind]
+    if kind == "queue-at" and n == len(names) + 1:
+        return {"kind": kind, "arg": i, "key": None}, None
+    if not 1 <= n <= len(names):
+        return None, (f"no {word} {n}: the state as it is written has {len(names)}. An edit held while the main "
+                      "checkout is frozen names an item by its number there (board.py check prints it); what an "
+                      "edit still held adds has no number until it is applied")
+    if not names[n - 1].strip():
+        return None, f"the {word} {n} has no text to hold it by; make this edit after the freeze"
+    return {"kind": kind, "arg": i, "key": names[n - 1]}, None
+
+
+def replay_argv(argv, ref, state):
+    """A held edit's command line with the item its ref names found again in `state` and its number written back:
+    (argv, None), or (None, why) when the item is gone or more than one item reads the same. An edit with no ref
+    is returned as it is."""
+    out = list(argv)
+    if not ref:
+        return out, None
+    kind, i, key = ref.get("kind"), ref.get("arg"), ref.get("key")
+    if kind not in REF_WORDS or not isinstance(i, int) or isinstance(i, bool) or not 0 < i < len(out):
+        return None, "its ref does not fit its command line"
+    names, word = ref_names(kind, state), REF_WORDS[kind]
+    if kind == "queue-at" and key is None:
+        out[i] = str(len(names) + 1)
+        return out, None
+    hits = [j for j, n in enumerate(names) if n == key]
+    if not hits:
+        return None, f"the {word} it names is gone: {str(key)[:80]!r}"
+    if len(hits) > 1:
+        return None, f"{len(hits)} {word}s read {str(key)[:80]!r}: which one it names cannot be told"
+    out[i] = str(hits[0] + 1)
+    return out, None
+
+
+def held_state(state, held):
+    """A copy of the state as it will be once the edits already held are applied, in memory only: each held edit
+    that is not marked failed is replayed on the copy, and one that does not apply there is left out, as it will
+    be at the real replay."""
+    sim = copy.deepcopy(state)
+    applied = state.get("_applied")
+    for h in held:
+        if not isinstance(h, dict) or h.get("failed") or (h.get("id") and h.get("id") == applied):
+            continue
+        trial = copy.deepcopy(sim)
+        try:
+            argv, why = replay_argv(list(h["argv"]), h.get("ref"), trial)
+            if why:
+                continue
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = edit_state(argv, at=parse_updated(h["at"]), write=False, state=trial)
+        except (Exception, SystemExit):
+            continue
+        if rc == 0:
+            sim = trial
+    return sim
+
+
 def hold_edit(argv, now):
-    with office.locked(office.office_dir()):
-        write_pending(read_pending() + [{"at": now.isoformat(timespec="seconds"), "argv": argv}])
+    """Checks an edit made while the main checkout is frozen and holds it: 0 held, else the exit code of the
+    refusal (the reason printed, nothing held). The number an edit names an item by is read against the written
+    state and kept as the item's identity (held_ref); the edit is then checked against the state as it will be
+    after the edits already held (held_state), so a second `blocker rm` of the same blocker is refused now and
+    not at the replay. Under the office lock (office.Refused when it is busy)."""
+    with office.locked(pending_file().parent):
+        held = read_pending()
+        disk, _ = read_state(required=True, fill=False)
+        sim = held_state(disk, held)
+        kept = held_argv(argv)
+        ref, why = held_ref(kept, disk, sim)
+        if why:
+            print(why)
+            return 2
+        run, why = replay_argv(kept, ref, sim)
+        if why:
+            print(f"refused: {why}, once the {sum(1 for h in held if not h.get('failed'))} edit(s) already held "
+                  "are applied (board.py pending lists them)")
+            return 2
+        rc = edit_state(run, at=now, write=False, state=copy.deepcopy(sim))
+        if rc:
+            return rc
+        write_pending(held + [{"id": held_id(now), "at": now.isoformat(timespec="seconds"), "argv": kept,
+                               **({"ref": ref} if ref else {})}])
+    return 0
 
 
 def apply_pending():
     """Replays the held edits in order, each with the time it was made, in the main checkout only (anywhere else
     they would land in the wrong state.json and be lost). Under the office lock, so two writers never replay the
-    same lines; a line that does not apply stays in the file, marked, for the manager to settle by hand."""
+    same lines. Each edit is one step that a kill cannot double: the state is written with the edit's id in
+    `_applied`, then the pending file is rewritten without it; a replay that finds the state's `_applied` on a
+    held edit drops that edit instead of applying it again. An edit that names an item by a number finds the item
+    again by what it was held as (replay_argv). A line that does not apply stays in the file, marked with the
+    reason, for the manager to settle by hand; the later ones are still applied."""
     if not counted_checkout() or not pending_file().exists():
         return 0
+    done = fresh = 0
+    left = []
     try:
-        with office.locked(office.office_dir()):
+        with office.locked(pending_file().parent):
             held = read_pending()
-            done, left = 0, []
-            for h in held:
+            if not held:
+                if pending_file().read_text(encoding="utf-8", errors="replace").strip():
+                    print(f"  ! {pending_file().as_posix()} cannot be read as held edits; nothing was applied. Settle "
+                          "it by hand, then delete it")
+                else:
+                    write_pending([])
+                return 0
+            if any(not h.get("id") and "_raw" not in h for h in held):  # a file from before the ids: name each line first
+                for h in held:
+                    if not h.get("id") and "_raw" not in h:
+                        h["id"] = held_id()
+                write_pending(held)
+            try:
+                applied = read_state(required=True, fill=False)[0].get("_applied")
+            except SystemExit:
+                applied = None
+            todo = list(held)
+            while todo:
+                h = todo.pop(0)
                 if h.get("failed"):
                     left.append(h)
                     continue
+                if h["id"] == applied:
+                    # the state has it and the file still listed it: a run was cut between the two writes
+                    print(f"  a held edit was already in the state (an earlier run was cut short); not applied twice: "
+                          f"{' '.join(map(str, h.get('argv', [])))[:120]}")
+                    write_pending(left + todo)
+                    continue
+                fresh += 1
                 try:
-                    rc = edit_state(list(h["argv"]), at=parse_updated(h["at"]))
+                    state, _ = read_state(required=True, fill=False)
+                    argv, why = replay_argv(list(h["argv"]), h.get("ref"), state)
+                    rc = why or edit_state(argv, at=parse_updated(h["at"]), state=state, applied=h["id"])
                 except (Exception, SystemExit) as e:  # one bad line must not lose the others
                     rc = f"{type(e).__name__}: {e}"
                 if rc == 0:
@@ -409,15 +926,22 @@ def apply_pending():
                 else:
                     left.append({**h, "failed": str(rc)})
                     print(f"  ! a held edit did not apply ({rc}) and stays in {pending_file().name}: {h}")
-            write_pending(left)
+                write_pending(left + todo)
     except office.Refused as e:
         print(f"  ! the held edits were not applied this time: {e}")
         return 0
-    fresh = sum(1 for h in held if not h.get("failed"))
+    except OSError as e:
+        print(f"  ! the held edits were not all applied this time ({type(e).__name__}: {e}); the next writing command "
+              "goes on from here")
+        return done
     if fresh:
-        print(f"applied {done} of {fresh} edit(s) held during a counted sweep")
-    if left:
-        print(f"  ! {len(left)} held edit(s) did not apply: make them by hand, then delete {pending_file().as_posix()}")
+        print(f"applied {done} of {fresh} edit(s) held while the main checkout was frozen")
+    raw = sum(1 for h in left if "_raw" in h)
+    if raw:
+        print(f"  ! {raw} line(s) of {pending_file().as_posix()} cannot be read as a held edit: kept and skipped "
+              "(board.py pending shows them)")
+    if len(left) > raw:
+        print(f"  ! {len(left) - raw} held edit(s) did not apply: make them by hand, then delete {pending_file().as_posix()}")
     return done
 
 
@@ -435,7 +959,7 @@ def out_name():
 
 
 STATE_SHAPES = {"notes": ("at", "by", "text"), "log": ("date", "title"), "decisions": ("id", "question", "status")}
-SHAPE_HINT = {"notes": "`board.py note --by` builds a note", "log": "a log entry is typed by hand",
+SHAPE_HINT = {"notes": "`board.py note --by` builds a note", "log": "`board.py log add` builds a log entry",
               "decisions": "`board.py decide ask` builds a decision"}
 
 
@@ -490,7 +1014,7 @@ def starter_state(now=None):
                   "crew_max": P.get("limits.crew_max", 4), "heavy_ok": False, "before_start": [], "blocks": []},
         "queue": [], "blockers": [], "log": [],
         "milestones": [], "lanes": {},
-        "rota": {"slots": default_slots(), "days": []},
+        "rota": {"slots": starter_slots(), "days": []},
         "checkpoints": [], "failures": [], "notes": [], "research_review": [],
         "usage": {"stop": USAGE_STOP, "points": []},
         "decisions": [],
@@ -564,17 +1088,301 @@ def read_roadmap():
         return {}, []
     reqs = {m[1]: (m[3] or m[2], m[4]) for m in REQ_ROW.finditer(text)}
     stages = []
-    for m in STAGE_ROW.finditer(text):
-        ids = []
-        for prefix, a, b in re.findall(r"([A-Z0-9]+)-(\d+)(?:–(\d+))?", re.sub(r"\([^)]*\)", "", m[4])):
-            ids += [f"{prefix}-{n:0{len(a)}d}" for n in range(int(a), int(b or a) + 1)]
+    for sid, title, theme, ids in stage_rows(text, reqs):
         sts = [reqs.get(i, (None, None))[1] for i in ids]
         met = sum(1 for s in sts if s in REQ_MET)
         status = ("done" if ids and met == len(ids) else
                   "partial" if any(s in REQ_MET or s == "Part" for s in sts) else "planned")
-        stages.append({"id": m[1], "title": m[2].strip(), "theme": m[3].strip(), "ids": ids, "met": met,
+        stages.append({"id": sid, "title": title, "theme": theme, "ids": ids, "met": met,
                        "counts": Counter(s or "missing" for s in sts), "status": status})
     return reqs, stages
+
+
+_FLOW = []  # flow.py once loaded, or None when it could not be; FLOW_ERROR says why
+FLOW_ERROR = ""
+
+
+def flow_tool():
+    """flow.py, next to this script, loaded on first use: the board reads a stage's exit cell with flow.py's own
+    functions, so the two never disagree about what a stage waits on. None when it cannot be loaded (the map then
+    reads numbered stages with full IDs and en-dash runs only, and the check says so)."""
+    global FLOW_ERROR
+    if not _FLOW:
+        try:
+            import flow
+            _FLOW.append(flow)
+        except Exception as e:  # a missing or broken flow.py must not stop the map
+            FLOW_ERROR = f"{type(e).__name__}: {e}"
+            _FLOW.append(None)
+    return _FLOW[0]
+
+
+MS_PAT = P.get("roadmap.milestone_id") or r"M\d+"
+DEC_PAT = P.get("roadmap.decision_id") or r"D\d+"
+STARTER_MARK = "<!-- STARTER"  # the first line of the roadmap founder.py init writes, until the founder writes the real one
+
+
+def roadmap_text():
+    """The roadmap's text, or None when there is none."""
+    try:
+        return ROADMAP.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def road_is_starter(text=None):
+    """True while the roadmap is the starter founder.py init wrote (its first line opens with <!-- STARTER): its
+    rows are examples of the shape, not the project's milestones and decisions."""
+    text = roadmap_text() if text is None else text
+    return bool(text) and text.lstrip("﻿").startswith(STARTER_MARK)
+
+
+def row_cells(line):
+    """A table row's cells, split on the pipes that are not escaped (a cell may hold `a \\| b`), each stripped and
+    with the escape taken off."""
+    parts = re.split(r"(?<!\\)\|", line.strip())
+    return [c.strip().replace("\\|", "|") for c in parts[1:-1]]
+
+
+def table_rows(text, pat, cells):
+    """(id, cells) of every line that opens like a row of the table whose ids match `pat` (`| D2 | ...`) and has at
+    least `cells` cells, and the ids of the lines that open so and have fewer."""
+    good, short = [], []
+    for m in re.finditer(r"^\| (" + pat + r") \|[^\n]*$", text, re.M):
+        row = row_cells(m[0])
+        (good if len(row) >= cells else short).append((m[1], row))
+    return good, [i for i, _ in short]
+
+
+def decision_state(stands):
+    """A decisions row's Where it stands as the register's word, by flow.py's rule: answered on **Decided, part on
+    **Half or a Decided that is Still open, else open."""
+    s = stands.strip()
+    if s.startswith("**Half") or (s.startswith("**Decided") and "Still open" in s):
+        return "part"
+    return "answered" if s.startswith("**Decided") else "open"
+
+
+def road_plan(text=None):
+    """What the roadmap's tables name beside the requirements: ({milestone id: {"title", "lane"}} in the tables'
+    order, {decision id: {"what", "stands", "need", "state"}}), the state "answered" where the roadmap's Where it
+    stands says Decided, else "open" ("part" for half decided). Read by flow.py's own reader (flow.parse_roadmap), so
+    the map, the register and the road graph mean the same rows; by this script's own rows (the profile's
+    roadmap.milestone_id and roadmap.decision_id, cells split on unescaped pipes) when flow.py cannot be loaded.
+    ({}, {}) with no roadmap."""
+    text = roadmap_text() if text is None else text
+    if text is None:
+        return {}, {}
+    fl = flow_tool()
+    if fl is not None:
+        try:
+            _, _, ms, lanes, decs, _ = fl.parse_roadmap(text)
+            return ({k: {"title": str(v.get("theme") or ""), "lane": str(lanes.get(k) or "")} for k, v in ms.items()},
+                    {k: {"what": d["what"], "stands": d["stands"], "need": d["need"],
+                         "state": {"decided": "answered", "part": "part"}.get(d["state"], "open")} for k, d in decs.items()})
+        except Exception:
+            pass
+    ms = {i: {"title": row[1], "lane": ""} for i, row in table_rows(text, MS_PAT, 4)[0]}
+    decs = {i: {"what": row[1], "stands": row[2].replace("**", ""), "need": row[4], "state": decision_state(row[2])}
+            for i, row in table_rows(text, DEC_PAT, 5)[0]}
+    return ms, decs
+
+
+def road_shape_warnings(text=None):
+    """What is wrong with the roadmap's own milestone and decision rows, as the check's sentences: a line that opens
+    like a decisions row and was not read (too few cells, or a pipe inside a cell that the reader took for a cell's
+    end), and an id that two rows carry (the last one wins)."""
+    text = roadmap_text() if text is None else text
+    if text is None:
+        return []
+    out = []
+    dec_rows, dec_short = table_rows(text, DEC_PAT, 5)
+    ms_rows, _ = table_rows(text, MS_PAT, 4)
+    read = road_plan(text)[1]
+    lost = list(dict.fromkeys([i for i, _ in dec_rows if i not in read] + dec_short))
+    if lost:
+        out.append(f"{ROADMAP_REL}: the decisions row(s) {', '.join(lost)} open like a row and were not read (a missing "
+                   "cell, or a pipe inside a cell: write it another way); the tools do not know these decisions.")
+    for what, rows in (("milestone", ms_rows), ("decision", dec_rows)):
+        ids = [i for i, _ in rows]
+        twice = [i for i in dict.fromkeys(ids) if ids.count(i) > 1]
+        if twice:
+            out.append(f"{ROADMAP_REL} has more than one {what} row for {', '.join(twice)}: the last one is read; give "
+                       "each its own id.")
+    return out
+
+
+def id_number(text):
+    """The number an id ends in (D12 -> 12), or None."""
+    m = re.search(r"(\d+)$", str(text or ""))
+    return int(m.group(1)) if m else None
+
+
+def next_decision_id(ids):
+    """The id `decide ask` files next, or None when it cannot tell: the prefix of the id with the highest number
+    among `ids` (the register's and the roadmap's), and that number plus one, as wide as it was written (D007 ->
+    D008). Only ids the profile's roadmap.decision_id matches lend their prefix; with none of those, the prefix is
+    the pattern's own when it is a plain prefix and \\d+ (an older register's D-numbers are still counted past).
+    None when that gives no id the pattern matches: `decide ask` then needs --id."""
+    parts = [m for m in (re.fullmatch(r"(.*?)(\d+)", str(i or "")) for i in ids) if m]
+    top = max((int(m[2]) for m in parts), default=0)
+    own = [m for m in parts if dec_id_ok(m[0])]
+    if own:
+        best = max(own, key=lambda m: int(m[2]))
+        made = best[1] + str(top + 1).zfill(len(best[2]) if best[2].startswith("0") else 0)
+    else:
+        lit = re.fullmatch(r"([A-Za-z_-]+)\\d(?:\+|\{\d+(?:,\d*)?\})?", DEC_PAT)
+        if lit is None:
+            return None
+        made = lit[1] + str(top + 1)
+    return made if dec_id_ok(made) and made not in ids else None
+
+
+def dec_id_ok(text):
+    """True when a text is a decision id by the profile's roadmap.decision_id."""
+    try:
+        return bool(re.fullmatch(DEC_PAT, str(text)))
+    except re.error:
+        return False
+
+
+def milestone_touched(state, m):
+    """Why a milestone is not the roadmap's alone to rewrite or drop, or "": anything but planned, a note, a
+    forced record, a checkpoint, the shift or a queued shift that carries it, a log entry that names it."""
+    mid = str(m.get("id"))
+    if m.get("status", "planned") != "planned":
+        return f"it is {m.get('status')}"
+    if str(m.get("note") or "").strip():
+        return "it has a note"
+    if m.get("forced"):
+        return "it has a forced record"
+    if any(isinstance(cp, dict) and cp.get("milestone") == mid for cp in state.get("checkpoints") or []):
+        return "it has a checkpoint"
+    shifts = [state.get("shift")] + list(state.get("queue") or [])
+    if any(isinstance(s, dict) and s.get("milestone") == mid for s in shifts):
+        return "a shift carries it"
+    word = re.compile(r"(?<![\w-])" + re.escape(mid) + r"(?![\w-])")
+    for e in state.get("log") or []:
+        if isinstance(e, dict) and word.search(json.dumps([e.get(k) for k in ("title", "done", "not_done", "verdicts", "next")],
+                                                          ensure_ascii=False)):
+            return "the log names it"
+    return ""
+
+
+def seed_milestones(state, road_ms=None):
+    """Adds to state.milestones every milestone the roadmap's tables name and the state lacks: status planned, the
+    title from the roadmap, the lane when the roadmap names one. An existing milestone is never changed or removed.
+    The ids added, in the roadmap's order ([] when state.milestones is not a list)."""
+    road_ms = road_plan()[0] if road_ms is None else road_ms
+    ms = state.setdefault("milestones", [])
+    if not isinstance(ms, list):
+        return []
+    have = {m.get("id") for m in ms if isinstance(m, dict)}
+    added = [k for k in road_ms if k not in have]
+    ms.extend({"id": k, "title": road_ms[k]["title"], "status": "planned", "lane": road_ms[k]["lane"], "note": ""}
+              for k in added)
+    return added
+
+
+def refresh_milestones(state, road_ms):
+    """Rewrites the title and the lane of each milestone the roadmap names differently, when the milestone is
+    still the roadmap's alone (milestone_touched says ""): one line per change."""
+    said = []
+    for m in state.get("milestones") or []:
+        r = road_ms.get(m.get("id")) if isinstance(m, dict) else None
+        if r is None or milestone_touched(state, m):
+            continue
+        for k in ("title", "lane"):
+            if str(m.get(k) or "") != r[k]:
+                said.append(f"{m['id']} {k}: {str(m.get(k) or '')[:50]!r} -> {r[k][:50]!r}")
+                m[k] = r[k]
+    return said
+
+
+def prune_milestones(state, road_ms):
+    """Removes the milestones the roadmap no longer names that are still the roadmap's alone: (the ids removed, a
+    line for each one kept and why)."""
+    gone, kept, left = [], [], []
+    for m in state.get("milestones") or []:
+        why = "" if not isinstance(m, dict) or m.get("id") in road_ms else (milestone_touched(state, m) or None)
+        if why is None:
+            gone.append(str(m.get("id")))
+            continue
+        if why:
+            kept.append(f"{m.get('id')} ({why})")
+        left.append(m)
+    state["milestones"][:] = left
+    return gone, kept
+
+
+def adopted_decision(did, d, now, by="", needed_before=""):
+    """The register entry for a decision the roadmap already names: its question is the roadmap's row, and it is
+    answered (the roadmap's Where it stands as the answer) when the roadmap says Decided, else open."""
+    stamp = now.isoformat(timespec="minutes")
+    done = d["state"] == "answered"
+    need = needed_before or ("" if d["need"].strip() in ("", "—", "-", "–") else d["need"].strip())
+    return {"id": did, "asked": stamp, "by": by or "roadmap", "question": d["what"], "options": [], "recommend": "",
+            "needed_before": need, "status": "answered" if done else "open", "answer": d["stands"] if done else "",
+            "answered": stamp if done else "", "brief": "", "from": "roadmap"}
+
+
+def road_warnings(state):
+    """What the roadmap's tables name and the state lacks, as the check's sentences: milestones (the road graph's
+    selftest fails on them once the state has any), open decisions the register lacks, and decisions the two call
+    answered and open. [] with no state file yet (init seeds both), and [] while the roadmap is still the starter:
+    its rows are examples, and a fresh project checks clean."""
+    text = roadmap_text()
+    if not STATE.exists() or text is None or road_is_starter(text):
+        return []
+    road_ms, road_decs = road_plan(text)
+    out = []
+    have = {m.get("id") for m in state.get("milestones") or [] if isinstance(m, dict)}
+    lack = [k for k in road_ms if k not in have]
+    if lack:
+        out.append(f"{ROADMAP_REL}'s milestone tables name {', '.join(lack)}, which the state's milestones lack: run "
+                   f"{BOARD} milestone sync.")
+    reg = {d.get("id"): d for d in state.get("decisions") or [] if isinstance(d, dict)}
+    lack = [k for k, d in road_decs.items() if d["state"] != "answered" and k not in reg]
+    if lack:
+        out.append(f"{ROADMAP_REL} names the open decision(s) {', '.join(lack)}, which the register lacks: run "
+                   + ", ".join(f"{BOARD} decide adopt {k}" for k in lack) + ".")
+    odd = [f"{k} ({ROADMAP_REL}: {'decided' if d['state'] == 'answered' else 'open'}; the register: {reg[k].get('status', 'open')})"
+           for k, d in road_decs.items() if k in reg and d["state"] != "part"
+           and reg[k].get("status", "open") in ("open", "answered") and reg[k].get("status", "open") != d["state"]]
+    if odd:
+        out.append("The register and the roadmap disagree on whether a decision is answered: " + "; ".join(odd)
+                   + ". Record the answer (decide answer) or correct the roadmap's row.")
+    return out
+
+
+def stage_rows(text, reqs):
+    """The roadmap's stage rows as (id, title, theme, exit IDs), in the order the road runs: the numbered stages,
+    then the profile's late stages, the goal last. The exit cell is read by flow.py (flow.exit_ids): full IDs, runs
+    ("APP-01–03"), short lists ("APP-01, 03, 04"), remarks in parentheses left out, "every P0" and "All P0 except
+    ..." for the first tier. An ID the cell names that has no requirement row is kept at the end of the list, so the
+    stage counts it as missing and the check names it."""
+    fl = flow_tool()
+    if fl is None:
+        rows = []
+        for m in STAGE_ROW.finditer(text):
+            ids = []
+            for prefix, a, b in re.findall(r"([A-Z0-9]+)-(\d+)(?:–(\d+))?", re.sub(r"\([^)]*\)", "", m[4])):
+                ids += [f"{prefix}-{n:0{len(a)}d}" for n in range(int(a), int(b or a) + 1)]
+            rows.append((m[1], m[2].strip(), m[3].strip(), ids))
+        return rows
+    freqs = {i: {"p": p} for i, (p, _) in reqs.items()}
+    every = re.compile(r"\b(all|every) " + re.escape(fl.TOP) + r"(?!\w)", re.I)
+    seen = {}
+    for m in fl.NAMED_ROW.finditer(text):
+        name = m["name"].strip()
+        sid = (name.split() or [""])[0]
+        if not fl.is_stage(sid):
+            continue
+        ids = fl.exit_ids(m["exit"], freqs)
+        named = [i for clause in m["exit"].split(";") if not every.search(clause) for i in fl.ids_in(clause)]
+        seen[sid] = (sid, name[len(sid):].strip(" →"), m["theme"].strip(),
+                     ids + [i for i in dict.fromkeys(named) if i not in reqs])
+    return [seen[s] for s in fl.stage_order(seen)]
 
 
 def pass_lanes(lanes):
@@ -854,6 +1662,14 @@ def attention(state, lanes, crew, res, now):
     out = []
     for line in missing_inputs():
         out.append(("s-next", "setup", line, "keeping"))
+    try:
+        fz = freeze_facts(now.timestamp())
+    except Exception:
+        fz = FREEZE_OFF
+    if fz["on"]:
+        out.append(("s-bad" if fz["stale"] else "s-warn", "freeze", freeze_text(fz) + ": change nothing in the main "
+                    "checkout until it ends" + (f" (if no counted run is going, end it: {OFFICE} freeze off)"
+                                                if fz["stale"] else ""), "keeping"))
     for d in open_decisions(state):
         before = f" (needed before {d['needed_before']})" if d.get("needed_before") else ""
         out.append(("s-next", "the user", f"{d.get('id', '?')} waits on the user{before}: {d.get('question', '')}",
@@ -1103,7 +1919,10 @@ def consistency(state, lanes, facts, now, crew):
             lane = lanes.get(item.get("lane", ""))
             v = lane["verdict"] if lane else None
             if item.get("status") == "done" and v != "PASS":
-                warn.append(f"{item.get('id')} is marked done but its lane {item.get('lane')} has {v or 'no run'}.")
+                forced = item.get("forced") if isinstance(item.get("forced"), dict) else None
+                warn.append(f"{item.get('id')} is marked done but its lane {item.get('lane')} has {v or 'no run'}"
+                            + (f" (done on the user's override of {str(forced.get('at', ''))[:10]}: \"{forced.get('words', '')}\")."
+                               if forced else "."))
             if item.get("status") != "done" and v == "PASS" and group == "milestones":
                 warn.append(f"{item.get('id')} is not marked done but {item['lane']} is PASS; update the status or say why.")
     blocks = state.get("shift", {}).get("blocks", [])
@@ -1198,7 +2017,7 @@ def consistency(state, lanes, facts, now, crew):
             import journal
             warn.extend(journal.warnings(Path(crew["dir"]), state, now.timestamp()))
         except Exception as exc:
-            warn.append(f"NOTE: journal.py could not be loaded ({type(exc).__name__}: {exc}); run {P.tool('journal.py')} due.")
+            warn.append(f"NOTE: journal.py could not be loaded ({type(exc).__name__}: {exc}); run {tool_line('journal.py')} due.")
     warn.extend(stale_contract_pins())
     if shift.get("crew_max") is None:
         warn.append(f"The shift {shift.get('id')} has no crew_max; the manager sets the headcount per shift.")
@@ -1248,10 +2067,15 @@ def consistency(state, lanes, facts, now, crew):
     reqs, stages = read_roadmap()
     if ROADMAP.is_file() and (not reqs or not stages):
         warn.append(f"{ROADMAP_REL} has no requirement rows or release stages the map can read; Road to {GOAL} is empty.")
+    if ROADMAP.is_file() and flow_tool() is None:
+        warn.append(f"NOTE: flow.py could not be loaded ({FLOW_ERROR}), so the map reads only numbered stages whose exit "
+                    "cell holds full IDs and en-dash runs; short lists, \"every " + TOP + "\", late stages and the goal row "
+                    "are not read until it loads.")
     for st in stages:
         missing = [i for i in st["ids"] if i not in reqs]
         if missing:
             warn.append(f"Release stage {st['id']} names {', '.join(missing)}, which no requirement row of {ROADMAP_REL} has.")
+    warn += road_shape_warnings() + road_warnings(state)
     # a PASS row counts as met as typed; say when the lane it names does not pass now, or when it names none
     stale, unnamed = pass_lanes(lanes)
     for row in stale:
@@ -1349,7 +2173,7 @@ a{color:var(--accent)}
 .check{list-style:none;padding:0;margin:0}
 .check li{display:grid;grid-template-columns:22px minmax(0,1fr);gap:8px;padding:7px 0;border-top:1px solid var(--border);font-size:14px;color:var(--text-2)}
 .check li:first-child{border-top:0}
-.check .box{display:inline-block;width:16px;height:16px;border:1.5px solid var(--border-2);border-radius:4px;margin-top:4px}
+.check .box{display:inline-block;width:16px;height:16px;border:1.5px solid var(--border-2);border-radius:4px;margin-top:4px;font-size:11px;line-height:13px;text-align:center}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,150px),1fr));gap:10px}
 .node{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 12px;min-width:0;border-top-width:4px}
 .node.s-done{border-top-color:var(--good-bd);background:var(--surface);color:var(--text)}
@@ -1872,7 +2696,7 @@ def render(state, lanes, facts, warns, now, crew):
         def ul(items):
             return "<ul>" + "".join(f"<li>{esc(x)}</li>" for x in items) + "</ul>" if items else "<p>—</p>"
         when = esc(e.get("date", "")) + (f" {esc(e['time'])}" if e.get("time") else "") + \
-            (f" · {esc(e['slot'])} slot" if e.get("slot") else "")
+            (f" · {esc(e['slot'])} slot" if e.get("slot") else "") + (f" · {esc(e['by'])}" if e.get("by") else "")
         log_html.append(
             f'<div class="log"><h3>{esc(e.get("title",""))} <span class="when">{when}</span></h3>'
             f'<div class="cols"><div><div class="k">Done</div>{ul(e.get("done"))}</div>'
@@ -1957,6 +2781,7 @@ def render(state, lanes, facts, warns, now, crew):
     blockers = "".join(
         f"<li><strong>{esc(b['what'])}</strong>" +
         (f"<br><span class=\"meta\">Owner: {esc(b['owner'])}</span>" if b.get("owner") else "") +
+        (f"<br><span class=\"meta\">Waits on: {esc(b['needs'])}</span>" if b.get("needs") else "") +
         (f"<br><span class=\"meta\">Fallback: {esc(b['fallback'])}</span>" if b.get("fallback") else "") +
         (f"<br><span class=\"meta\">Shift: {esc(b['shift'])}</span>" if b.get("shift") else "") + "</li>"
         for b in S.get("blockers", []))
@@ -1980,6 +2805,10 @@ def render(state, lanes, facts, warns, now, crew):
         + f'<td class="num">{sum(by_p[p].values())}</td></tr>'
         for p in TIERS)
 
+    checklist_html = "".join(
+        f'<li><span class="box" aria-hidden="true">{"✓" if ticked else ""}</span><span>{esc(line)}'
+        + (f' <span class="meta">ticked {esc(ticked[:16].replace("T", " "))}</span>' if ticked else "") + "</span></li>"
+        for line, ticked in map(check_item, S.get("checklist", [])))
     dirty = f"dirty, {len(facts['dirty'])} tracked files changed" if facts["dirty"] else "clean"
     return f"""<!doctype html>
 <html lang="en">
@@ -2070,7 +2899,7 @@ def render(state, lanes, facts, warns, now, crew):
 <h2 id="shift-start">Before a shift</h2>
 <p class="sub">Read this map, then walk the list. Nothing heavy starts before the user has answered what the list asks of them.</p>
 <div class="card"><ol class="check">
-{"".join(f'<li><span class="box" aria-hidden="true"></span><span>{esc(c)}</span></li>' for c in S.get("checklist", [])) or "<li><span></span><span>No checklist yet (state.checklist).</span></li>"}
+{checklist_html or "<li><span></span><span>No checklist yet (board.py checklist add).</span></li>"}
 </ol></div>
 
 <h2 id="shift">This shift: {esc(shift.get("title", ""))}</h2>
@@ -2120,13 +2949,13 @@ def render(state, lanes, facts, warns, now, crew):
 <div class="two">
   <div class="card"><h3>End of a block</h3>
     <ol>
-      <li>In <code>{esc(STATE_REL)}</code>: set the block's <code>status</code> (done, partial, skipped), add a <code>log</code> entry at the top (done, not done, verdicts, commits, next), update <code>now</code> (position, tree hash), and any milestone or phase status that changed.</li>
+      <li>Set the block's status (<code>board.py block 3 done</code>), add the log entry (<code>board.py log add</code>: done, not done, verdicts, commits, next), update Now (<code>board.py now --position "..." --tree auto</code>) and any milestone that changed (<code>board.py milestone set</code>). Each command writes <code>{esc(STATE_REL)}</code> and rebuilds this map.</li>
       <li>Rebuild and read the warnings box:</li>
     </ol>
     <pre><code>{esc(BOARD)} check</code></pre>
     <ol start="3">
       <li>Commit <code>{esc(STATE_REL)}</code> and <code>{esc(MAP_REL)}</code> with the block's last commit.</li>
-      <li>When the last block is done or skipped: <code>board.py promote</code> moves the first queued shift into <code>shift</code> and its blockers into <code>blockers</code> (the standing ones stay); then set its <code>when</code>, update <code>now</code>, rebuild, commit. A new shift plan is appended to <code>queue</code>, never written over <code>shift</code>.</li>
+      <li>When the last block is done or skipped: <code>board.py promote</code> moves the first queued shift into <code>shift</code> and its blockers into <code>blockers</code> (the standing ones stay); then set its <code>when</code> (<code>board.py shift set</code>), update Now, commit. A new shift plan is added to the queue (<code>board.py queue add</code>), never written over <code>shift</code>.</li>
     </ol>
   </div>
   <div class="card"><h3>Start of a shift</h3>
@@ -2174,13 +3003,34 @@ def init_state():
     """`init`: writes the starter state when the project has none. An existing state is never overwritten (exit 3)."""
     if STATE.exists():
         print(f"refused: {STATE.as_posix()} exists; init never overwrites a state. Edit it with the edit commands "
-              "(note, block, fail, rr, usage, decide), or by hand.")
+              f"({', '.join(EDITS)}), or by hand.")
         return 3
     STATE.parent.mkdir(parents=True, exist_ok=True)
-    write_state(starter_state())
+    state = starter_state()
+    # a roadmap that is already there names milestones and decisions: the state starts with them (what `milestone
+    # sync` and `decide adopt` do later), so the road graph and the check agree with it from the first block
+    # The starter roadmap founder.py init writes is the exception: its rows are examples, so nothing is taken from it
+    starter = road_is_starter()
+    road_ms, road_decs = ({}, {}) if starter else road_plan()
+    seeded = seed_milestones(state, road_ms)
+    now = dt.datetime.now().astimezone()
+    state["decisions"] = [adopted_decision(k, d, now) for k, d in reversed(list(road_decs.items()))]
+    write_state(state)
+    if seeded or road_decs:
+        took = ", ".join(d["id"] + " " + d["status"] for d in reversed(state["decisions"]))
+        print(f"from {ROADMAP_REL}: " + "; ".join(x for x in (
+            f"{len(seeded)} milestone(s), planned ({', '.join(seeded)})" if seeded else "",
+            f"{len(road_decs)} decision(s) in the register ({took})" if road_decs else "") if x))
+    slots = starter_slots()
     print(f"wrote {STATE.as_posix()}: Now, an empty shift (crew_max {P.get('limits.crew_max', 4)}), the rota's slots "
-          f"({', '.join(s['id'] + ' ' + s['start'] for s in default_slots())}), usage stop {USAGE_STOP}%. "
-          "Next: milestones and lanes, the first shift plan in queue, then board.py promote.")
+          f"({', '.join(s['id'] + ' ' + s['start'] for s in slots)})"
+          + (f", each with its research-and-review window ({', '.join(s['rr'] for s in slots)}; board.py rota slots "
+             "turns the check of them on)" if all(s.get("rr") for s in slots) else "")
+          + f", usage stop {USAGE_STOP}%. Next: "
+          + (f"the founder writes {ROADMAP_REL} (it is still the starter, so no milestone or decision was taken from "
+             "it), then board.py milestone sync and board.py decide adopt <id> for its decisions; " if starter else
+             "" if seeded else "milestones (board.py milestone set); ")
+          + "the first shift plan (board.py queue add), then board.py promote.")
     return 0
 
 
@@ -2208,7 +3058,8 @@ def promote():
     state["queue"] = queue
     state["updated"] = dt.datetime.now().astimezone().isoformat(timespec="minutes")
     write_state(state)
-    print(f"promoted {nxt['id']}; {len(queue)} shift(s) still queued. Edit now.headline, now.position and the shift's when, then commit.")
+    print(f"promoted {nxt['id']}; {len(queue)} shift(s) still queued. Set Now (board.py now --headline ... --position ...) "
+          "and the shift's when (board.py shift set --when ... --by ...), then commit.")
     return 0
 
 
@@ -2278,7 +3129,8 @@ def check(state, lanes, facts, warns, now, crew, rebuilt=True):
         print(f"  road to {GOAL}: no roadmap yet ({ROADMAP_REL})")
     print("  checklist:")
     for i, c in enumerate(S.get("checklist", []), 1):
-        print(f"    {i}. {c}")
+        line, ticked = check_item(c)
+        print(f"    {i}. {'[x] ' if ticked else ''}{line}" + (f" (ticked {ticked[:16].replace('T', ' ')})" if ticked else ""))
     attn = attention(S, lanes, crew, read_resource(crew, now), now)
     print(f"  needs attention: {len(attn)}")
     dev = dev_hold()
@@ -2296,7 +3148,618 @@ def check(state, lanes, facts, warns, now, crew, rebuilt=True):
     return 1 if warns else 0
 
 
-def edit_state(argv, at=None, write=True):
+def hm_minutes(text):
+    h, m = str(text).split(":")
+    return int(h) * 60 + int(m)
+
+
+def rr_slots(slots, minutes):
+    """A copy of the rota's slots with each one's research-and-review window written from its start: `minutes`
+    long ("22:00-23:30"). ValueError when a window would not fit inside the shortest slot."""
+    srt = sorted(slots, key=lambda s: s["start"])
+    starts = [hm_minutes(s["start"]) for s in srt]
+    out = []
+    for s in slots:
+        i = srt.index(s)
+        length = (starts[(i + 1) % len(starts)] - starts[i]) % 1440 or 1440
+        if not 1 <= minutes <= length:
+            raise ValueError(f"a window of {minutes} min does not fit the {s['id']} slot ({length} min)")
+        a = starts[i]
+        b = (a + minutes) % 1440
+        out.append({**s, "rr": f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}"})
+    return out
+
+
+def starter_slots():
+    """The rota's slots as `init` writes them: the profile's, each with its research-and-review window when the
+    profile's slots.review_window_min fits (rota.rr_since is left out, so no window is checked until the manager
+    runs `rota slots`)."""
+    slots = default_slots()
+    try:
+        return rr_slots(slots, int(P.get("slots.review_window_min", 90)))
+    except (TypeError, ValueError, KeyError):
+        return slots
+
+
+def load_json_arg(value, what):
+    """A --file value as (data, None), or (None, why): a path to a JSON file, or the JSON itself (how a held edit
+    keeps the file it was given)."""
+    s = str(value or "").strip()
+    try:
+        if s[:1] in ("[", "{"):
+            return json.loads(s), None
+        return json.loads(Path(s).read_text(encoding="utf-8-sig")), None
+    except OSError as e:
+        return None, f"{what} {s}: the file could not be read ({e.strerror or e})"
+    except ValueError as e:
+        return None, f"{what} {s[:60]}: not JSON ({e})"
+
+
+def code_tip(limit=500):
+    """(short sha, None) of the last commit on this branch that is not only records (the map's own files, reports,
+    notes, a counted run's records: is_record), or (None, why). It is what `now --tree auto` writes."""
+    out = git("log", f"-n{limit}", "--first-parent", "-m", "--name-only", "--format=%x01%h")
+    if not out:
+        return None, "git gave no history here"
+    for chunk in out.split("\x01"):
+        lines = [l.strip() for l in chunk.splitlines() if l.strip()]
+        if lines and any(not is_record(f.strip('"')) for f in lines[1:]):
+            return lines[0], None
+    return None, f"none of the last {limit} commits touches anything but records"
+
+
+def held_argv(argv):
+    """An edit's command line as it is held: a --file or --crew-file path becomes the JSON read now, and `now --tree
+    auto` the commit it means now, so the edit applied later is the one that was made."""
+    out = list(argv)
+    for i, a in enumerate(out[:-1]):
+        if a == "--":
+            break
+        if a in FILE_OPTS and a[2:] in EDIT_OPTS.get(out[0], ()):
+            data, why = load_json_arg(out[i + 1], a)
+            if why is None:
+                out[i + 1] = json.dumps(data, ensure_ascii=False)
+        elif a == "--tree" and out[0] == "now" and out[i + 1] == "auto":
+            out[i + 1] = code_tip()[0] or "auto"
+    return out
+
+
+def check_item(c):
+    """A checklist item as (text, when it was ticked or ""): a plain line, or {"text", "done"} once ticked."""
+    if isinstance(c, dict):
+        return str(c.get("text", "")), str(c.get("done") or "")
+    return str(c), ""
+
+
+def same_badge(a, b):
+    """True when two texts open with the same badge id ("EMP-03" and "EMP-03 m1-builder")."""
+    a, b = str(a or "").split(), str(b or "").split()
+    return bool(a and b) and a[0].upper() == b[0].upper()
+
+
+def blocks_problem(blocks, where):
+    """Why a list of blocks (a shift plan's) cannot be taken, or None: each is an object with a title, and none has
+    a status yet but pending."""
+    if not isinstance(blocks, list) or not blocks:
+        return f"{where} must be a list of blocks, at least one"
+    for i, b in enumerate(blocks, 1):
+        if not isinstance(b, dict) or not str(b.get("title") or "").strip():
+            return f"{where}: block {i} must be an object with a title"
+        if b.get("status", "pending") != "pending":
+            return f"{where}: block {i} is {b.get('status')!r}; a planned block is pending"
+    return None
+
+
+def shift_ids(state):
+    """The ids of the current shift and of every queued one."""
+    return [x for x in [(state.get("shift") or {}).get("id")] + [q.get("id") for q in state.get("queue") or []
+                                                                if isinstance(q, dict)] if x]
+
+
+def milestone_lane(state, item):
+    """A milestone's gym lane: its own `lane`, else the lane of its checkpoint, else the state.lanes row that names
+    it; "" when none does."""
+    if item.get("lane"):
+        return str(item["lane"])
+    mid = str(item.get("id"))
+    cps = [cp for cp in state.get("checkpoints") or [] if isinstance(cp, dict) and cp.get("milestone") == mid and cp.get("lane")]
+    if cps:
+        return str(cps[-1]["lane"])
+    lanes = state.get("lanes") if isinstance(state.get("lanes"), dict) else {}
+    word = re.compile(rf"(?<![\w-]){re.escape(mid)}(?![\w-])")
+    return next((name for name, text in lanes.items() if word.search(str(text))), "")
+
+
+def queue_list(args):
+    """`queue list`: the queued shifts in order, 1 the next to be promoted; reads only."""
+    if args:
+        print("usage: board.py queue list")
+        return 2
+    state, _ = read_state()
+    queue = [q for q in state.get("queue") or [] if isinstance(q, dict)]
+    print(f"{len(queue)} shift(s) queued after {(state.get('shift') or {}).get('id') or 'the current one'}")
+    for i, q in enumerate(queue, 1):
+        print(f"  {i}. {q.get('id')}: {str(q.get('title', ''))[:90]} (crew_max {q.get('crew_max', 'not set')}, "
+              f"{len(q.get('blocks') or [])} block(s)" + (f", {q['milestone']}" if q.get("milestone") else "") + ")")
+    return 0
+
+
+def edit_more(cmd, opts, flags, pos, state, now):
+    """The edits a manager makes every block (log, now, rota, checkpoint, blocker, checklist, shift, queue,
+    milestone), on a loaded state: (0, what was done), or (exit code, None) with the reason printed and the state
+    not to be written. Exit 2 is a command that cannot be read or names something unknown; exit 3 is a rule's
+    refusal (a milestone done whose lane has not passed, a grader who is the builder, blocks replaced after work
+    began)."""
+    usage = usage_of(cmd)
+    verb = None if cmd == "now" else (pos[0] if pos else "")
+    form = EDIT_FORMS.get((cmd, verb))
+    if form is None or any(k not in form[0] for k in [*opts, *flags]):
+        print(usage)
+        return 2, None
+    args = pos if cmd == "now" else pos[1:]
+    stamp = now.isoformat(timespec="minutes")
+
+    def no(msg, rc=2):
+        print(msg)
+        return rc, None
+
+    def text(k):
+        return str(opts.get(k) or "").strip()
+
+    def split(s):
+        return [x.strip() for x in str(s or "").split("|") if x.strip()]
+
+    def listed(key):
+        """state[key] as a list (made when absent), or None when someone typed something else there."""
+        v = state.setdefault(key, [])
+        return v if isinstance(v, list) else None
+
+    def index(arg, items, what):
+        """A 1-based number into items as a 0-based index, or None."""
+        return int(arg) - 1 if re.fullmatch(r"[0-9]+", str(arg)) and 1 <= int(arg) <= len(items) else None
+
+    def add_note(line):
+        notes = listed("notes")
+        if notes is not None:
+            notes.insert(0, {"at": stamp, "by": text("by") or "board.py", "text": line})
+
+    rota = state.get("rota") if isinstance(state.get("rota"), dict) else None
+    slots = (rota or {}).get("slots") or default_slots()
+    shift = state.get("shift") if isinstance(state.get("shift"), dict) else None
+
+    if cmd == "log":
+        log = listed("log")
+        if args or not text("by") or not text("title"):
+            return no(usage)
+        if log is None:
+            return no("state.log is not a list; fix it by hand first")
+        slot = text("slot") or office.slot_at((rota or {}).get("slots"), now.timestamp())[0]
+        if slot not in [s.get("id") for s in slots]:
+            return no(f"--slot {slot}: the rota's slots are {', '.join(str(s.get('id')) for s in slots)}")
+        commits = [x for x in re.split(r"[,\s]+", text("commits")) if x]
+        odd = [c for c in commits if not re.fullmatch(r"[0-9a-f]{7,40}", c)]
+        if odd:
+            return no(f"--commits takes commit hashes (7 to 40 hex digits), comma-separated; not {', '.join(odd)}")
+        verdicts = split(opts.get("verdicts"))
+        odd = [v for v in verdicts if not re.search(r"\b(?:" + "|".join(VERDICT) + r")\b", v)]
+        if odd:
+            return no(f"--verdicts: each item names a verdict word ({', '.join(VERDICT)}), as in \"G1 PASS | G2 FAIL\"; "
+                      f"not {odd[0]!r}")
+        if "crew-file" in opts and "crew" in opts:
+            return no("give the crew once: --crew-file (the list office.py end-shift --out wrote) or --crew \"a | b\"")
+        crew = split(opts.get("crew"))
+        if "crew-file" in opts:
+            crew, why = load_json_arg(opts["crew-file"], "--crew-file")
+            if why or not isinstance(crew, list) or any(not isinstance(x, str) for x in crew):
+                return no(why or "--crew-file must hold a JSON list of lines, as office.py end-shift --out writes it")
+        log.insert(0, {"date": f"{now:%Y-%m-%d}", "time": f"{now:%H:%M}", "slot": slot, "title": text("title"),
+                       "by": text("by"), "done": split(opts.get("done")), "not_done": split(opts.get("not-done")),
+                       "verdicts": verdicts, "commits": commits, "next": text("next"), **({"crew": crew} if crew else {})})
+        return 0, f"log entry added ({now:%Y-%m-%d %H:%M}, {slot} slot): {text('title')[:80]}"
+
+    if cmd == "now":
+        if args or not opts or any(not text(k) for k in opts):
+            return no(usage)
+        tree = text("tree")
+        if tree == "auto":
+            tree, why = code_tip()
+            if not tree:
+                return no(f"--tree auto: {why}; name the commit")
+        elif tree:
+            if not re.fullmatch(r"[0-9a-f]{7,40}", tree):
+                return no(f"--tree takes a commit hash (7 to 40 hex digits) or auto; not {tree!r}")
+            if git("rev-parse", "--git-dir") and git("cat-file", "-t", tree) != "commit":
+                return no(f"--tree {tree}: git knows no such commit here")
+        if not isinstance(state.get("now"), dict):
+            state["now"] = {}
+        for k in ("headline", "position"):
+            if k in opts:
+                state["now"][k] = text(k)
+        if tree:
+            state["now"]["tree"] = tree
+        return 0, "now updated (" + ", ".join(f"tree {tree}" if k == "tree" else k for k in opts) + ")"
+
+    if cmd == "rota":
+        if rota is None:
+            if state.get("rota") is not None:
+                return no("state.rota is not an object; fix it by hand first")
+            rota = state["rota"] = {}
+        if verb == "slots":
+            if args:
+                return no(usage)
+            raw = text("rr-min") or str(P.get("slots.review_window_min", 90))
+            if not re.fullmatch(r"[0-9]+", raw):
+                return no(f"--rr-min takes whole minutes; not {raw!r}")
+            try:
+                rota["slots"] = rr_slots(slots, int(raw))
+            except (ValueError, KeyError, TypeError) as e:
+                return no(f"refused: {e}")
+            since = ""
+            if not rota.get("rr_since"):
+                rota["rr_since"] = stamp
+                since = f"; the check holds every slot that starts after {stamp} to its window"
+            return 0, ("research-and-review windows written: "
+                       + ", ".join(f"{s['id']} {s['rr']}" for s in rota["slots"]) + since)
+        try:
+            date = dt.date.fromisoformat(text("date"))
+        except ValueError:
+            return no(usage)
+        sid = text("slot")
+        sl = next((s for s in slots if s.get("id") == sid), None)
+        new = {k: text(k) for k in ("shift", "manager", "ends", "note") if k in opts}
+        if args or not new:
+            return no(usage)
+        if sl is None:
+            return no(f"--slot {sid}: the rota's slots are {', '.join(str(s.get('id')) for s in slots)}")
+        days = rota.setdefault("days", [])
+        if not isinstance(days, list):
+            return no("state.rota.days is not a list; fix it by hand first")
+        if new.get("shift"):
+            known = set(shift_ids(state)) | {str(v.get("shift")) for e in days if isinstance(e, dict)
+                                            for v in e.values() if isinstance(v, dict) and v.get("shift")}
+            if new["shift"] not in known:
+                return no(f"--shift {new['shift']}: not the id of the shift, of a queued one, or of one the rota already "
+                          f"names ({', '.join(sorted(known)) or 'none yet'})")
+        if new.get("manager") and not re.match(r"[A-Z]+-\d+(?!\S)", new["manager"]):
+            return no(f"--manager opens with a badge id (MGR-4); not {new['manager']!r}")
+        if new.get("ends"):
+            t0 = dt.datetime.fromisoformat(f"{date.isoformat()}T{sl['start']}:00").astimezone()
+            _, s0, s1 = office.slot_at(slots, t0.timestamp())
+            _, why = read_ends(sid, s0, s1, new["ends"])
+            if why:
+                return no("refused: " + why)
+        day = next((e for e in days if isinstance(e, dict) and e.get("date") == date.isoformat()), None)
+        if day is None:
+            day = {"date": date.isoformat()}
+            dates = [str(e.get("date")) for e in days if isinstance(e, dict)]
+            newest_first = len(dates) > 1 and dates == sorted(dates, reverse=True) and dates != sorted(dates)
+            at = next((i for i, e in enumerate(days) if isinstance(e, dict) and
+                       (str(e.get("date")) < day["date"] if newest_first else str(e.get("date")) > day["date"])), len(days))
+            days.insert(at, day)
+        entry = day[sid] if isinstance(day.get(sid), dict) else {}
+        for k, v in new.items():
+            if v:
+                entry[k] = v
+            else:
+                entry.pop(k, None)  # an empty value takes the key out (a mistyped end)
+        day[sid] = entry
+        return 0, f"rota {date.isoformat()} {sid}: " + ", ".join(f"{k} {v or 'removed'}" for k, v in new.items())
+
+    if cmd == "checkpoint":
+        cps = listed("checkpoints")
+        if cps is None:
+            return no("state.checkpoints is not a list; fix it by hand first")
+        if verb == "add":
+            lane, ms = text("lane"), text("milestone")
+            if args or not lane or not ms or not re.fullmatch(r"[\w.-]+", lane):
+                return no(usage)
+            if any(isinstance(cp, dict) and cp.get("lane") == lane for cp in cps):
+                return no(f"{lane} already has a checkpoint; change it with board.py checkpoint set {lane}")
+            if same_badge(text("builder"), text("grader")):
+                return no(f"refused: the grader is the builder ({text('grader')}); a grader is independent", 3)
+            blocks = (shift or {}).get("blocks") or []
+            n = None
+            if "block" in opts:
+                n = index(opts["block"], blocks, "block")
+                if n is None:
+                    return no(f"--block takes a block of the current shift (1-{len(blocks)}); not {opts['block']!r}")
+            cps.append({"lane": lane, "milestone": ms, "shift": (shift or {}).get("id"), "builder": text("builder"),
+                        "grader": text("grader"), "set_at": f"{now:%Y-%m-%d %H:%M}", "note": text("note")})
+            if n is not None:
+                blocks[n]["checkpoint"] = lane
+            if isinstance(state.setdefault("lanes", {}), dict):
+                state["lanes"].setdefault(lane, ms)  # the lane's row on the map, named by what it gates
+            return 0, (f"checkpoint {lane} set for {ms}" + (f", on block {n + 1}" if n is not None else "")
+                       + ("" if text("grader") else "; it has no grader yet"))
+        cp = next((x for x in cps if isinstance(x, dict) and x.get("lane") == (args[0] if len(args) == 1 else None)), None)
+        if len(args) != 1 or not opts:
+            return no(usage)
+        if cp is None:
+            return no(f"no checkpoint {args[0]} in state.checkpoints; add it with board.py checkpoint add")
+        new = {**cp, **{k: text(k) for k in opts}}
+        if same_badge(new.get("builder"), new.get("grader")):
+            return no(f"refused: the grader would be the builder ({new.get('grader')}); a grader is independent", 3)
+        cp.update({k: text(k) for k in opts})
+        return 0, f"checkpoint {args[0]}: " + ", ".join(f"{k} {text(k) or 'cleared'}" for k in opts)
+
+    if cmd == "blocker":
+        bl = listed("blockers")
+        if bl is None:
+            return no("state.blockers is not a list; fix it by hand first")
+        if verb == "add":
+            if args or not text("what") or not text("owner"):
+                return no(usage)
+            needs = text("needs")
+            if needs and not any(isinstance(d, dict) and d.get("id") == needs for d in state.get("decisions") or []):
+                return no(f"--needs {needs}: no such decision in the register (board.py decide list); file it first with "
+                          "board.py decide ask")
+            if text("shift") and text("shift") not in shift_ids(state):
+                return no(f"--shift {text('shift')}: not the id of the shift or of a queued one "
+                          f"({', '.join(shift_ids(state)) or 'none'})")
+            bl.append({"what": text("what"), "owner": text("owner"), **({"needs": needs} if needs else {}),
+                       **({"shift": text("shift")} if text("shift") else {}), "at": stamp})
+            return 0, (f"blocker {len(bl)} added" + (f" (it waits on {needs})" if needs else "")
+                       + (f", for the shift {text('shift')}" if text("shift") else ", standing"))
+        if len(args) != 1 or not text("note"):
+            return no(usage)
+        n = index(args[0], bl, "blocker")
+        if n is None and not re.fullmatch(r"[0-9]+", args[0]):
+            hits = [i for i, b in enumerate(bl) if isinstance(b, dict)
+                    and str(b.get("what", "")).casefold().startswith(args[0].casefold())]
+            if len(hits) > 1:
+                return no(f"{len(hits)} blockers start with {args[0]!r}; give more of the text, or the number")
+            n = hits[0] if hits else None
+        if n is None:
+            return no(f"no blocker {args[0]!r}: there are {len(bl)}, numbered as board.py check prints them")
+        gone = bl.pop(n)
+        what = gone.get("what", "") if isinstance(gone, dict) else str(gone)
+        add_note(f"Blocker cleared: {what} ({text('note')})")
+        return 0, f"blocker {n + 1} removed: {str(what)[:80]}"
+
+    if cmd == "checklist":
+        cl = listed("checklist")
+        if cl is None:
+            return no("state.checklist is not a list; fix it by hand first")
+        if verb == "add":
+            if len(args) != 1 or not args[0].strip():
+                return no(usage)
+            cl.append(args[0].strip())
+            return 0, f"checklist line {len(cl)} added"
+        if verb == "reset":
+            if args:
+                return no(usage)
+            cl[:] = [check_item(c)[0] for c in cl]
+            return 0, f"checklist: every tick cleared ({len(cl)} line(s))"
+        n = index(args[0], cl, "line") if len(args) == 1 else None
+        if n is None:
+            return no(usage.replace("<n>", f"<1-{len(cl)}>"))
+        if verb == "done":
+            cl[n] = {"text": check_item(cl[n])[0], "done": stamp}
+            return 0, f"checklist line {n + 1} ticked"
+        gone = cl.pop(n)
+        return 0, f"checklist line {n + 1} removed: {check_item(gone)[0][:80]}"
+
+    if cmd == "shift":
+        if shift is None:
+            return no("the state has no shift object; fix it by hand first")
+        if verb == "blocks":
+            if args or "file" not in opts:
+                return no(usage)
+            blocks, why = load_json_arg(opts["file"], "--file")
+            why = why or blocks_problem(blocks, "--file")
+            if why:
+                return no(why)
+            begun = [str(b.get("time") or i) for i, b in enumerate(shift.get("blocks") or [], 1)
+                     if isinstance(b, dict) and b.get("status") in ("done", "in-progress", "partial", "skipped")]
+            if begun:
+                return no(f"refused: block(s) {', '.join(begun)} of the shift {shift.get('id')} are done, skipped, partial "
+                          "or in progress; a plan is replaced only before its work begins. Queue the new plan "
+                          "(board.py queue add) or change the blocks by hand", 3)
+            shift["blocks"] = [{**b, "status": "pending"} for b in blocks]
+            return 0, f"the shift {shift.get('id')} has {len(blocks)} block(s), all pending"
+        changes = [k for k in ("crew-max", "heavy-ok", "milestone") if k in opts]
+        if args or not text("by") or not (changes or "when" in opts):
+            return no(usage)
+        if ("crew-max" in opts or "heavy-ok" in opts) and not text("words"):
+            return no("refused: crew_max and heavy_ok are the user's numbers; --words \"the user's own words\" is "
+                      "required with --crew-max and --heavy-ok")
+        if "crew-max" in opts and not re.fullmatch(r"[0-9]{1,3}", text("crew-max")):
+            return no(f"--crew-max takes a whole number; not {text('crew-max')!r}")
+        if "heavy-ok" in opts and text("heavy-ok") not in ("yes", "no"):
+            return no(f"--heavy-ok takes yes or no; not {text('heavy-ok')!r}")
+        if "milestone" in opts and not text("milestone"):
+            return no(usage)
+        said = []
+        if "when" in opts:
+            shift["when"] = text("when")
+        if "crew-max" in opts:
+            shift["crew_max"] = int(text("crew-max"))
+            said.append(f"crew_max {shift['crew_max']}")
+        if "heavy-ok" in opts:
+            shift["heavy_ok"] = text("heavy-ok") == "yes"
+            said.append(f"heavy_ok {text('heavy-ok')}")
+        if "milestone" in opts:
+            shift["milestone"] = text("milestone")
+            said.append(f"milestone {shift['milestone']}")
+        if said:
+            record = (f"{now:%Y-%m-%d %H:%M} {text('by')}: {', '.join(said)}"
+                      + (f", on the user's words: \"{text('words')}\"" if text("words") else ""))
+            shift["when"] = (str(shift["when"]).rstrip() + "; " if shift.get("when") else "") + record
+        return 0, f"shift {shift.get('id')}: " + (", ".join(said) or "when set")
+
+    if cmd == "queue":
+        queue = listed("queue")
+        if queue is None:
+            return no("state.queue is not a list; fix it by hand first")
+        if verb == "add":
+            if args or "file" not in opts:
+                return no(usage)
+            q, why = load_json_arg(opts["file"], "--file")
+            if why:
+                return no(why)
+            if not isinstance(q, dict):
+                return no("--file must hold one shift: an object with id, title, crew_max and blocks")
+            for k in ("id", "title"):
+                if not isinstance(q.get(k), str) or not q[k].strip():
+                    return no(f"the queued shift needs {k!r} (a text)")
+            if number(q.get("crew_max")) is None or q["crew_max"] != int(q["crew_max"]) or q["crew_max"] < 0:
+                return no("the queued shift needs 'crew_max' (a whole number): the headcount the user set for it")
+            why = blocks_problem(q.get("blocks"), "blocks")
+            if why:
+                return no(why)
+            if q["id"] in shift_ids(state):
+                return no(f"the shift id {q['id']} is already used (the shift and the queue: {', '.join(shift_ids(state))})")
+            at = len(queue)
+            if "at" in opts:
+                at = index(opts["at"], [*queue, None], "place")
+                if at is None:
+                    return no(f"--at takes a place in the queue (1-{len(queue) + 1}; 1 is promoted next); not {opts['at']!r}")
+            queue.insert(at, q)
+            return 0, f"queued {q['id']} at place {at + 1} of {len(queue)} ({len(q['blocks'])} block(s), crew_max {q['crew_max']})"
+        want = 2 if verb == "move" else 1
+        at = next((i for i, q in enumerate(queue) if isinstance(q, dict) and q.get("id") == (args[0] if args else None)), None)
+        if len(args) != want or (verb == "rm" and not text("note")):
+            return no(usage)
+        if at is None:
+            return no(f"no queued shift {args[0]} (board.py queue list)")
+        if verb == "rm":
+            gone = queue.pop(at)
+            add_note(f"Queued shift {gone.get('id')} removed: {gone.get('title', '')} ({text('note')})")
+            return 0, f"{gone.get('id')} removed from the queue; {len(queue)} left"
+        to = index(args[1], queue, "place")
+        if to is None:
+            return no(f"queue move takes a place in the queue (1-{len(queue)}; 1 is promoted next); not {args[1]!r}")
+        queue.insert(to, queue.pop(at))
+        return 0, f"{args[0]} is at place {to + 1} of {len(queue)}"
+
+    # milestone sync, milestone set
+    ms = listed("milestones")
+    if verb == "sync":
+        if args:
+            return no(usage)
+        if ms is None:
+            return no("state.milestones is not a list; fix it by hand first")
+        road_ms = road_plan()[0]
+        if not road_ms:
+            if "prune" in flags:
+                return no(f"refused: {ROADMAP_REL} names no milestone the tools can read, so --prune would drop every "
+                          "planned one; nothing changed")
+            return 0, f"milestone sync: {ROADMAP_REL} names no milestone the tools can read; nothing added"
+        # a planned milestone nothing has touched is the roadmap's to rewrite: its title and lane follow the row
+        fresh_lines = refresh_milestones(state, road_ms)
+        added = seed_milestones(state, road_ms)
+        gone, kept = prune_milestones(state, road_ms) if "prune" in flags else ([], [])
+        stray = [str(m.get("id")) for m in ms if isinstance(m, dict) and m.get("id") not in road_ms]
+        parts = [f"added {', '.join(added)} from {ROADMAP_REL} (planned; " + "; ".join(
+            f"{k} {road_ms[k]['title'][:50]}" + (f" [{road_ms[k]['lane']}]" if road_ms[k]["lane"] else "") for k in added) + ")"
+                 if added else f"nothing to add; the state has all {len(road_ms)} milestone(s) {ROADMAP_REL} names"]
+        if fresh_lines:
+            parts.append("refreshed from the roadmap: " + "; ".join(fresh_lines))
+        if gone:
+            parts.append(f"removed {', '.join(gone)} (planned, untouched, no longer in {ROADMAP_REL})")
+        if kept:
+            parts.append(f"kept though {ROADMAP_REL} no longer names them: {', '.join(kept)}")
+        if stray and "prune" not in flags:
+            parts.append(f"{', '.join(stray)} not in {ROADMAP_REL}: board.py milestone sync --prune removes the planned, "
+                         "untouched ones")
+        return 0, "milestone sync: " + "; ".join(parts)
+    status = text("status")
+    if len(args) != 1 or status not in MILESTONE_STATUSES:
+        return no(usage)
+    if ms is None:
+        return no("state.milestones is not a list; fix it by hand first")
+    item = next((m for m in ms if isinstance(m, dict) and m.get("id") == args[0]), None)
+    fresh = item is None
+    seeded = []
+    if fresh:
+        road_ms = road_plan()[0]
+        if args[0] in road_ms:
+            # an id the roadmap names: the state gets every milestone the roadmap names, so the road graph's check
+            # of the two lists stays whole; this one keeps the --title and --lane given with it
+            seeded = seed_milestones(state, road_ms)
+            item = next(m for m in ms if isinstance(m, dict) and m.get("id") == args[0])
+            item.update({k: text(k) for k in ("title", "lane") if text(k)})
+            fresh = False
+    # --title and --lane write a new milestone only. An existing one keeps its title, and its lane is what it is
+    # judged on: naming another lane (one that has passed, say) is refused unless the user's override records it
+    lane_was = "" if fresh else milestone_lane(state, item)
+    relane = not fresh and bool(text("lane")) and text("lane") != lane_was
+    if "force" in flags and status != "done" and not relane:
+        return no(usage)
+    if relane:
+        if "force" not in flags:
+            return no(f"refused: {args[0]} is judged on {('the lane ' + lane_was) if lane_was else 'no lane yet'}, and "
+                      f"--lane {text('lane')} would re-point it: --title and --lane are for a milestone the list does "
+                      "not have yet. To change an existing milestone's lane, record the user's override: --lane "
+                      f"{text('lane')} --force --words \"the user's own words\"", 3)
+        if not text("words"):
+            return no("refused: --force records the user's override, so it needs --words \"the user's own words\"")
+    if fresh:
+        if not text("title"):
+            return no(f"no milestone {args[0]} in state.milestones ({', '.join(str(m.get('id')) for m in ms if isinstance(m, dict)) or 'none yet'}); "
+                      "the founder writes the list. To add it here, give --title (and --lane when it has one)")
+        item = {"id": args[0], "title": text("title"), "status": "planned", "lane": text("lane"), "note": ""}
+    else:
+        item = dict(item)
+        if relane:
+            item["lane"] = text("lane")
+    said = f"{args[0]} is {status}"
+    if not fresh and text("title") and text("title") != str(item.get("title", "")):
+        said += " (--title is for a new milestone: its title is unchanged)"
+    # the user's override of the lane: written now, or kept from an earlier one while the lane is still that one,
+    # also through a later PASS (it is why that lane judges the milestone)
+    old = item.get("forced") if isinstance(item.get("forced"), dict) else {}
+    moved = ({"at": stamp, "words": text("words"), "lane": text("lane"), "lane_was": lane_was} if relane else
+             {k: old[k] for k in ("at", "words", "lane", "lane_was") if k in old}
+             if "lane_was" in old and old.get("lane") == item.get("lane") else None)
+    if status == "done":
+        lane = milestone_lane(state, item)
+        rec = read_lanes(state).get(lane) if lane else None
+        verdict = (rec or {}).get("verdict")
+        if lane and not item.get("lane"):
+            item["lane"] = lane  # the lane it is judged on, so the check reads the same one
+        if verdict == "PASS":
+            item.pop("forced", None)
+            if moved:
+                item["forced"] = {**moved, "verdict": "PASS"}
+            said += f" ({lane} PASS, run {rec['run_id']})"
+        else:
+            have = (f"its lane {lane} has {verdict} as its latest counted verdict (run {rec['run_id']}), not PASS" if verdict else
+                    f"its lane {lane} has no counted run in {GYM_REL}/series" if lane else
+                    "it names no lane (no `lane` of its own, no checkpoint, no row in state.lanes)")
+            if "force" not in flags:
+                return no(f"refused: {args[0]} is not done: {have}. A milestone is done only when its gym lane says "
+                          "PASS. Run the lane's counted run, or record the user's override: --force --words \"the user's "
+                          "own words\"", 3)
+            if not text("words"):
+                return no("refused: --force records the user's override, so it needs --words \"the user's own words\"")
+            item["forced"] = {"at": stamp, "words": text("words"), "lane": lane, "verdict": verdict or "no run",
+                              **({"lane_was": moved["lane_was"]} if moved else {})}
+            said += f", forced on the user's words ({have})"
+    else:
+        if text("words") and not relane:
+            return no(usage)
+        item.pop("forced", None)
+        if moved:
+            item["forced"] = moved
+    if relane:
+        said += f"; its lane is now {text('lane')}, not {lane_was or 'none'}, on the user's words"
+    item["status"] = status
+    if "note" in opts:
+        item["note"] = text("note")
+    if fresh:
+        ms.append(item)
+        said += " (added to state.milestones)"
+    else:
+        ms[next(i for i, m in enumerate(ms) if isinstance(m, dict) and m.get("id") == args[0])] = item
+    if seeded:
+        others = [k for k in seeded if k != args[0]]
+        said += (f" (added from {ROADMAP_REL}, with its title" + (f"; {', '.join(others)} added too, planned: the state "
+                 "now has every milestone the roadmap names" if others else "") + ")")
+    return 0, said
+
+
+def edit_state(argv, at=None, write=True, state=None, applied=None):
     """The manager's routine state edits, so a round needs no scratch script. Each one sets `updated` to now and
     keeps the file's format; the caller rebuilds (main does). Only the manager runs these.
         note --by MGR-1 "text"                  a note at the top of state.notes
@@ -2310,14 +3773,23 @@ def edit_state(argv, at=None, write=True):
                                                 the next D<n> at the top of state.decisions, open
         decide answer D7 --words "the user's own words"    D7 is answered (empty words are refused)
         decide withdraw D7 --note T             D7 no longer needs an answer
+        log add, now, rota set|slots, checkpoint add|set, blocker add|rm, checklist add|done|rm|reset,
+        shift set|blocks, queue add|rm|move, milestone set
+                                                the edits of every block (edit_more; EDIT_FORMS has each form's
+                                                options and usage line)
     Each command takes only its own options; any other is refused and nothing is written. A bare `--` ends the
     options, so a text may start with `--`: note --by MGR-1 -- "--force was wrong".
-    `at` replays a held edit at the time it was made; write=False checks the command and writes nothing.
+    Exit 0 written (or checked), 2 a command that cannot be read or names something unknown, 3 a rule's refusal.
+    `at` replays a held edit at the time it was made; write=False checks the command and writes nothing. `state`
+    is the state to edit when the caller has read it already (with write=False it is changed in memory only: how a
+    held edit is checked against the edits held before it); `applied` is the id of the held edit being replayed,
+    written into the state's `_applied` in the same write, so a replay cut short never applies it twice.
     """
     cmd, args = argv[0], list(argv[1:])
     usage_line = {"decide": 'usage: board.py decide ask --by <badge id> --question "text" [--options "a | b"] '
-                            '[--recommend "text"] [--needed-before M12] [--brief <path>] | decide answer D<n> --words '
-                            '"the user\'s own words" | decide withdraw D<n> --note "text" | decide list [--open]',
+                            '[--recommend "text"] [--needed-before M12] [--brief <path>] [--id <id>] | decide answer D<n> --words '
+                            '"the user\'s own words" | decide withdraw D<n> --note "text" | decide adopt D<n> '
+                            '[--by <badge id>] [--needed-before M3] | decide adopt D<n> --refresh | decide list [--open]',
                   "note": 'usage: board.py note --by <badge id> [--] "text"',
                   "usage": "usage: board.py usage <weekly percent 0-100> [--stop <percent 0-100>] "
                            "[--reset <ISO time of the weekly reset>]",
@@ -2325,25 +3797,30 @@ def edit_state(argv, at=None, write=True):
                   "fail": 'usage: board.py fail --what "text" [--lane L] [--run-id R] [--verdict V] [--plan P] [--owner O] '
                           "[--status " + "|".join(FAIL_STATUSES) + "] [--from R12,R13]",
                   "rr": 'usage: board.py rr --kind review|research --by "<badge> <name>" --topic "text" [--report <path>] '
-                        '[--commit <sha>] [--finding "a | b"] [--action "a | b"] [--slot <slot id>] [--date YYYY-MM-DD]'}[cmd]
-    opts, pos = {}, []
+                        '[--commit <sha>] [--finding "a | b"] [--action "a | b"] [--slot <slot id>] [--date YYYY-MM-DD]'
+                  }.get(cmd) or usage_of(cmd)
+    opts, pos, flags = {}, [], set()
     while args:
         a = args.pop(0)
         if a == "--":
             pos += args  # everything after a bare -- is text
             break
         if a.startswith("--"):
+            if a[2:] in EDIT_FLAGS.get(cmd, ()):
+                flags.add(a[2:])
+                continue
             if a[2:] not in EDIT_OPTS[cmd]:
                 print(f"{cmd} takes no option {a}; " + usage_line)
                 return 2
-            if not args or (cmd in ("fail", "rr", "decide") and args[0].startswith("--")):
+            if not args or (cmd not in ("note", "usage", "block") and args[0].startswith("--")):
                 # `fail --what --plan x` would file "--plan" as the failure
                 print(f"{a} needs a value" + (" (a value may not start with --)" if args else ""))
                 return 2
             opts[a[2:]] = args.pop(0)
         else:
             pos.append(a)
-    state, _ = read_state(required=True, fill=False)
+    if state is None:
+        state, _ = read_state(required=True, fill=False)
     now = at or dt.datetime.now().astimezone()
     if cmd == "decide":
         decs = state.setdefault("decisions", [])
@@ -2351,17 +3828,74 @@ def edit_state(argv, at=None, write=True):
             print("state.decisions is not a list; fix it by hand first")
             return 2
         verb = pos[0] if pos else ""
-        took = {"ask": ("by", "question", "options", "recommend", "needed-before", "brief"), "answer": ("words",),
-                "withdraw": ("note",)}.get(verb)
-        if took is None or any(k not in took for k in opts):
+        took = {"ask": ("by", "question", "options", "recommend", "needed-before", "brief", "id"), "answer": ("words",),
+                "withdraw": ("note",), "adopt": ("by", "needed-before")}.get(verb)
+        if took is None or any(k not in took for k in opts) or (flags and (verb != "adopt" or opts)):
             print(usage_line)
             return 2
-        if verb == "ask":
+        known = [x.get("id") for x in decs if isinstance(x, dict)]
+        if verb == "adopt":
+            # a decision the roadmap's table already names gets its register entry under the same id
+            if len(pos) != 2:
+                print(usage_line)
+                return 2
+            road = road_plan()[1]
+            have = next((x for x in decs if isinstance(x, dict) and x.get("id") == pos[1]), None)
+            if "refresh" in flags:
+                # the roadmap was rewritten after the entry was adopted: read the row again, unless a person has
+                # asked or answered it through the register since
+                if have is None:
+                    print(f"no decision {pos[1]} in state.decisions to refresh; adopt it first: board.py decide adopt {pos[1]}")
+                    return 2
+                if have.get("from") != "roadmap" or have.get("by") != "roadmap" or have.get("settled"):
+                    print(f"refused: {pos[1]} was asked, adopted by a badge or settled through the register; --refresh "
+                          "reads again only an entry adopted from the roadmap by `roadmap` itself (init's, or adopt "
+                          "with no --by) that nobody has answered or withdrawn here")
+                    return 2
+                if pos[1] not in road:
+                    print(f"refused: {ROADMAP_REL}'s decisions table no longer names {pos[1]}; withdraw it: board.py "
+                          f"decide withdraw {pos[1]} --note \"text\"")
+                    return 2
+                fresh = adopted_decision(pos[1], road[pos[1]], now)
+                have.clear()
+                have.update(fresh)
+                said = f"{pos[1]} read again from {ROADMAP_REL} ({fresh['status']}): {fresh['question'][:80]}"
+            else:
+                if have is not None:
+                    print(f"refused: the register already has {pos[1]} (board.py decide list); to read it again from "
+                          f"{ROADMAP_REL}: board.py decide adopt {pos[1]} --refresh")
+                    return 2
+                if pos[1] not in road:
+                    print(f"refused: {ROADMAP_REL}'s decisions table names no {pos[1]} "
+                          f"({', '.join(road) or 'it names none'}); a new question is filed with board.py decide ask")
+                    return 2
+                entry = adopted_decision(pos[1], road[pos[1]], now, str(opts.get("by") or "").strip(),
+                                         str(opts.get("needed-before") or "").strip())
+                decs.insert(0, entry)
+                said = (f"{pos[1]} adopted from {ROADMAP_REL} ({entry['status']}"
+                        + ("; it waits on the user" if entry["status"] == "open" else "") + f"): {entry['question'][:80]}")
+        elif verb == "ask":
             if len(pos) != 1 or not str(opts.get("by") or "").strip() or not str(opts.get("question") or "").strip():
                 print(usage_line)
                 return 2
-            nums = [int(m.group(1)) for d in decs for m in [re.fullmatch(r"D(\d+)", str((d or {}).get("id", "")))] if m]
-            did = f"D{(max(nums) if nums else 0) + 1}"
+            # the next id after the highest in the register or in the roadmap's decisions table: the road graph
+            # and a blocker's --needs name a decision by this id, so one id never means two questions
+            road = road_plan()[1]
+            if "id" in opts:
+                did = str(opts["id"]).strip()
+                if not dec_id_ok(did):
+                    print(f"--id {did}: not a decision id by the profile's roadmap.decision_id ({DEC_PAT})")
+                    return 2
+                if did in known or did in road:
+                    print(f"refused: {did} is already " + ("in the register (board.py decide list)" if did in known else
+                                                           f"a decision of {ROADMAP_REL}: board.py decide adopt {did}"))
+                    return 2
+            else:
+                did = next_decision_id(known + list(road))
+                if did is None:
+                    print(f"refused: decide ask cannot pick the next id: the profile's roadmap.decision_id ({DEC_PAT}) is "
+                          "not a prefix and a number. Name it: --id <id>")
+                    return 2
             decs.insert(0, {"id": did, "asked": now.isoformat(timespec="minutes"), "by": opts["by"].strip(),
                             "question": opts["question"].strip(),
                             "options": [x.strip() for x in str(opts.get("options") or "").split("|") if x.strip()],
@@ -2371,13 +3905,17 @@ def edit_state(argv, at=None, write=True):
             said = f"{did} filed (open; it waits on the user)"
         else:
             d = next((x for x in decs if isinstance(x, dict) and x.get("id") == (pos[1] if len(pos) == 2 else None)), None)
-            if len(pos) != 2 or not re.fullmatch(r"D\d+", pos[1]):
+            if len(pos) != 2 or not (dec_id_ok(pos[1]) or pos[1] in known):
                 print(usage_line)
                 return 2
             if d is None:
                 print(f"no decision {pos[1]} in state.decisions (board.py decide list)")
                 return 2
-            if d.get("status", "open") != "open":
+            # an entry adopted from the roadmap whose row is gone (the roadmap was rewritten) is withdrawn whatever
+            # its status: nothing else can take the starter's or an old roadmap's answer out of the register
+            orphan = (verb == "withdraw" and d.get("from") == "roadmap" and d.get("status") != "withdrawn"
+                      and pos[1] not in road_plan()[1])
+            if d.get("status", "open") != "open" and not orphan:
                 print(f"{pos[1]} is already {d.get('status')}; only an open decision is answered or withdrawn "
                       "(ask a new one if the question came back)")
                 return 2
@@ -2395,7 +3933,9 @@ def edit_state(argv, at=None, write=True):
                     print(f"refused: decide withdraw needs --note saying why {pos[1]} no longer needs an answer")
                     return 2
                 d.update(status="withdrawn", note=why, withdrawn=now.isoformat(timespec="minutes"))
-                said = f"{pos[1]} withdrawn"
+                said = f"{pos[1]} withdrawn" + (f" (adopted from {ROADMAP_REL}, which no longer names it)" if orphan else "")
+            if d.get("from") == "roadmap":
+                d["settled"] = "register"  # a person settled it here: `adopt --refresh` leaves it alone from now on
     elif cmd == "note":
         if len(pos) != 1 or not opts.get("by"):
             print(usage_line)
@@ -2467,6 +4007,10 @@ def edit_state(argv, at=None, write=True):
                           "findings": split(opts.get("finding")), "actions": split(opts.get("action")),
                           "report": opts.get("report", ""), "commit": opts.get("commit", "")})
             said = f"{rid} filed ({opts['kind']}, {rs[0]['slot']} {rs[0]['date']})"
+    elif any(c == cmd for c, _ in EDIT_FORMS):
+        rc, said = edit_more(cmd, opts, flags, pos, state, now)
+        if rc:
+            return rc
     else:
         blocks = state.get("shift", {}).get("blocks", [])
         if (len(pos) != 2 or not re.fullmatch(r"[0-9]+", pos[0]) or not 1 <= int(pos[0]) <= len(blocks)
@@ -2484,6 +4028,8 @@ def edit_state(argv, at=None, write=True):
     was = parse_or_none(state.get("updated"))
     if at is None or was is None or was < now:
         state["updated"] = now.isoformat(timespec="seconds")
+    if applied:
+        state["_applied"] = str(applied)  # the last held edit replayed into this state (apply_pending reads it)
     write_state(state)
     print(said)
     return 0
@@ -2588,8 +4134,15 @@ def brief(state, lanes, facts, warns, now, crew, full=False, keys=None):
     if not has_resource():
         for k in ("resource", "counted_sweep", "counted_unmarked", "dev_not_counted"):
             out.pop(k, None)
+    # the office's freeze marker, only while it is on: who froze the main checkout, why, since when (epoch seconds)
+    try:
+        fz = freeze_facts(now.timestamp())
+    except Exception:
+        fz = FREEZE_OFF
+    if fz["on"]:
+        out["freeze"] = fz
     if keys is not None:
-        unknown = [k for k in keys if k not in out]
+        unknown = [k for k in keys if k not in out and k != "freeze"]  # `freeze` is a key only while one is on
         out = {k: v for k, v in out.items() if k == "warnings" or k in keys}
         if unknown:
             out["unknown_keys"] = unknown
@@ -2704,10 +4257,12 @@ def selftest():
     # the record and stale-run checks through consistency() itself, on a fixture roadmap, series and git (module
     # paths swapped for a temp dir and restored; nothing in the checkout is read)
     swapped = ("ROOT", "STATE", "OUT", "GYM", "ROADMAP", "SERIES", "PREREG", "CONTRACTS", "CHARTS", "GRADES", "git",
-               "unmarked_hold", "sweep_hold", "dev_hold", "read_pending", "read_crew", "has_resource")
+               "unmarked_hold", "sweep_hold", "dev_hold", "read_pending", "read_crew", "has_resource", "freeze_facts",
+               "pending_file")
     keep = {k: g[k] for k in swapped}
     tmp = Path(tempfile.mkdtemp(prefix="board-selftest-"))
     try:
+        g["freeze_facts"] = lambda now=None: dict(FREEZE_OFF)  # the checkout's own office is not read
         (tmp / "series").mkdir()
         (tmp / "prereg").mkdir()
         (tmp / "series" / "G1.json").write_text(json.dumps({"points": [
@@ -2852,7 +4407,8 @@ def selftest():
                and st0.get("shift", {}).get("blocks") == [] and st0["shift"].get("crew_max") == P.get("limits.crew_max", 4)
                and st0["shift"].get("heavy_ok") is False, st0.get("shift"))
         expect("init: the profile's rota slots, the usage stop, and every list empty",
-               st0.get("rota", {}).get("slots") == default_slots() and st0.get("usage") == {"stop": USAGE_STOP, "points": []}
+               [{k: s[k] for k in ("id", "start")} for s in st0.get("rota", {}).get("slots", [])] == default_slots()
+               and "rr_since" not in st0["rota"] and st0.get("usage") == {"stop": USAGE_STOP, "points": []}
                and all(st0.get(k) == [] for k in ("queue", "blockers", "log", "checkpoints", "failures", "notes",
                                                   "research_review", "decisions")), st0)
         before = g["STATE"].read_bytes()
@@ -2950,6 +4506,451 @@ def selftest():
         expect("write_state refuses a decision that is not an object, and writes nothing",
                err is not None and "state.decisions[0]" in err and not (tmp / "bad.json").exists(), err)
         expect("decide is held during a counted run like note (it is one of the edits)", "decide" in EDITS and "note" in EDITS)
+
+        # the edits of every block: each form writes its own keys, a bad one is refused and writes nothing
+        def ed(*argv):
+            return quiet(edit_state, list(argv))
+
+        def saved():
+            return json.loads(g["STATE"].read_text(encoding="utf-8"))
+        expect("every newer edit command is one of the edits held during a counted run, with a usage line per form",
+               all(c in EDITS for c, _ in EDIT_FORMS) and all(set(o) <= set(EDIT_OPTS[c]) | set(EDIT_FLAGS.get(c, ()))
+                                                              for (c, _), (o, _) in EDIT_FORMS.items()))
+        rc, said = ed("log", "add", "--by", "MGR-1", "--title", "Block 1: the skeleton", "--done", "a | b", "--not-done", "c",
+                      "--verdicts", "G1 PASS n=30 | G2 FAIL", "--commits", "abc1234,def5678", "--next", "block 2",
+                      "--crew", "EMP-1 x (builder): done, 1.0 h")
+        e = saved()["log"][0]
+        expect("log add writes an entry at the top with the clock's date and time and the slot now",
+               rc == 0 and e["title"] == "Block 1: the skeleton" and e["by"] == "MGR-1" and e["done"] == ["a", "b"]
+               and e["not_done"] == ["c"] and e["verdicts"] == ["G1 PASS n=30", "G2 FAIL"]
+               and e["commits"] == ["abc1234", "def5678"] and e["next"] == "block 2" and e["crew"] == ["EMP-1 x (builder): done, 1.0 h"]
+               and bool(re.fullmatch(r"\d{4}-\d\d-\d\d", e["date"])) and bool(re.fullmatch(r"\d\d:\d\d", e["time"]))
+               and e["slot"] in [s["id"] for s in default_slots()], said + str(e))
+        crew_file = tmp / "crew.json"
+        crew_file.write_text(json.dumps(["EMP-2 y (grader): done, 0.5 h"]), encoding="utf-8")
+        rc, said = ed("log", "add", "--by", "MGR-1", "--title", "Block 2", "--crew-file", str(crew_file))
+        expect("log add --crew-file reads the list office.py end-shift --out wrote",
+               rc == 0 and saved()["log"][0]["crew"] == ["EMP-2 y (grader): done, 0.5 h"], said)
+        held = held_argv(["log", "add", "--by", "MGR-1", "--title", "t", "--crew-file", str(crew_file)])
+        expect("a held edit keeps the JSON of the file it was given, and applies from it",
+               held[-1] == '["EMP-2 y (grader): done, 0.5 h"]' and ed(*held)[0] == 0
+               and saved()["log"][0]["crew"] == ["EMP-2 y (grader): done, 0.5 h"], held)
+        rc, said = ed("now", "--headline", "M1 in work", "--position", "block 2 of 5", "--tree", "abc1234")
+        expect("now sets the headline, the position and the tree",
+               rc == 0 and saved()["now"]["headline"] == "M1 in work" and saved()["now"]["tree"] == "abc1234", said)
+        log_lines = "\x01aaa1111\ndocs/progress/state.json\n\x01bbb2222\nsrc/app/main.rs\n\x01ccc3333\nREADME.md"
+        g["git"] = lambda *a: log_lines.replace("docs/progress/state.json", STATE_REL) if a[:1] == ("log",) else ""
+        expect("now --tree auto is the last commit that is not only records", code_tip() == ("bbb2222", None), code_tip())
+        rc, said = ed("now", "--tree", "auto")
+        expect("... and writes it", rc == 0 and saved()["now"]["tree"] == "bbb2222", said)
+        expect("... and a held `now --tree auto` keeps the commit it meant", held_argv(["now", "--tree", "auto"])[-1] == "bbb2222")
+        g["git"] = lambda *args: ""
+        day0 = "2030-01-12"
+        rc, said = ed("rota", "set", "--date", day0, "--slot", "day", "--shift", "start", "--manager", "MGR-1",
+                      "--ends", "15:00", "--note", "the user: 'run to three'")
+        ent = saved()["rota"]["days"][0]
+        expect("rota set writes the day's slot entry",
+               rc == 0 and ent["date"] == day0 and ent["day"] == {"shift": "start", "manager": "MGR-1", "ends": "15:00",
+                                                                 "note": "the user: 'run to three'"}, said + str(ent))
+        rc, said = ed("rota", "set", "--date", day0, "--slot", "day", "--ends", "")
+        expect("rota set updates the same entry; an empty --ends takes the key out",
+               rc == 0 and len(saved()["rota"]["days"]) == 1 and "ends" not in saved()["rota"]["days"][0]["day"]
+               and saved()["rota"]["days"][0]["day"]["manager"] == "MGR-1", said)
+        rc, said = ed("rota", "slots", "--rr-min", "60")
+        r1 = saved()["rota"]
+        expect("rota slots writes each slot's window from its start and sets rr_since",
+               rc == 0 and [s["rr"][:5] for s in r1["slots"]] == [s["start"] for s in r1["slots"]]
+               and rr_window(r1, r1["slots"][0]["id"], dt.datetime.fromisoformat(f"{day0}T{r1['slots'][0]['start']}:00")
+                             .astimezone().timestamp()) is not None and parse_or_none(r1.get("rr_since")) is not None, said)
+        since = r1["rr_since"]
+        rc, said = ed("rota", "slots")
+        expect("... and a second run keeps rr_since and writes the profile's window",
+               rc == 0 and saved()["rota"]["rr_since"] == since, said)
+        blocks_json = json.dumps([{"time": "06:00-08:00", "title": "Q1: skeleton", "done_when": "it starts"},
+                                  {"time": "08:00-10:00", "title": "Q2: the counted run", "done_when": "G1 graded"}])
+        rc, said = ed("shift", "blocks", "--file", blocks_json)
+        expect("shift blocks replaces the plan, every block pending",
+               rc == 0 and [b["status"] for b in saved()["shift"]["blocks"]] == ["pending", "pending"], said)
+        rc, said = ed("checkpoint", "add", "--lane", "G1", "--milestone", "M1", "--builder", "EMP-1", "--grader", "EMP-2",
+                      "--block", "2")
+        s1 = saved()
+        expect("checkpoint add writes the checkpoint, the block's checkpoint and the lane's row",
+               rc == 0 and s1["checkpoints"][-1]["lane"] == "G1" and s1["checkpoints"][-1]["grader"] == "EMP-2"
+               and s1["checkpoints"][-1]["shift"] == "start" and s1["shift"]["blocks"][1].get("checkpoint") == "G1"
+               and s1["lanes"].get("G1") == "M1", said)
+        was = g["STATE"].read_bytes()
+        rc, said = ed("checkpoint", "set", "G1", "--grader", "EMP-1 again")
+        expect("a grader who is the builder is refused (exit 3), nothing written",
+               rc == 3 and "independent" in said and g["STATE"].read_bytes() == was, said)
+        rc, said = ed("checkpoint", "set", "G1", "--note", "prereg abc1234")
+        expect("checkpoint set changes one field", rc == 0 and saved()["checkpoints"][-1]["note"] == "prereg abc1234", said)
+        rc, said = ed("blocker", "add", "--what", "The signing key is not here", "--owner", "the user", "--needs", "D3")
+        rc2, said2 = ed("blocker", "add", "--what", "Second blocker", "--owner", "EMP-1", "--shift", "start")
+        bl = saved()["blockers"]
+        expect("blocker add writes what, owner, needs and the shift it is tied to",
+               rc == 0 and rc2 == 0 and bl[0]["needs"] == "D3" and "shift" not in bl[0] and bl[1]["shift"] == "start", said + said2)
+        rc, said = ed("blocker", "rm", "the signing", "--note", "the user sent it", "--by", "MGR-1")
+        s1 = saved()
+        expect("blocker rm by the start of its text removes it and leaves a note",
+               rc == 0 and [b["what"] for b in s1["blockers"]] == ["Second blocker"]
+               and s1["notes"][0]["by"] == "MGR-1" and "the user sent it" in s1["notes"][0]["text"], said)
+        ed("checklist", "add", "Read the hand-off")
+        ed("checklist", "add", "--", "--no-build for employees")
+        rc, said = ed("checklist", "done", "1")
+        cl = saved()["checklist"]
+        expect("checklist add and done: a ticked line keeps its text and the time",
+               rc == 0 and check_item(cl[0])[0] == "Read the hand-off" and check_item(cl[0])[1] and cl[1] == "--no-build for employees", cl)
+        rc, said = ed("checklist", "rm", "2")
+        rc2, said2 = ed("checklist", "reset")
+        expect("checklist rm and reset", rc == 0 and rc2 == 0 and saved()["checklist"] == ["Read the hand-off"], said + said2)
+        rc, said = ed("shift", "set", "--crew-max", "6", "--heavy-ok", "yes", "--milestone", "M1", "--by", "MGR-1",
+                      "--words", "six is fine, heavy too")
+        sh = saved()["shift"]
+        expect("shift set writes the user's numbers and appends the words to `when`",
+               rc == 0 and sh["crew_max"] == 6 and sh["heavy_ok"] is True and sh["milestone"] == "M1"
+               and "six is fine, heavy too" in sh["when"] and "MGR-1" in sh["when"], said + str(sh.get("when")))
+        ed("block", "1", "done")
+        was = g["STATE"].read_bytes()
+        rc, said = ed("shift", "blocks", "--file", blocks_json)
+        expect("shift blocks is refused once a block is done (exit 3)", rc == 3 and g["STATE"].read_bytes() == was, said)
+        qfile = tmp / "next-shift.json"
+        qfile.write_text(json.dumps({"id": "m2-store", "title": "M2 store", "crew_max": 3, "milestone": "M2",
+                                     "blocks": [{"time": "06:00-08:00", "title": "Q1", "done_when": "x"}]}), encoding="utf-8")
+        rc, said = ed("queue", "add", "--file", str(qfile))
+        rc2, said2 = ed("queue", "add", "--file", json.dumps({"id": "m3-ship", "title": "M3 ship", "crew_max": 2,
+                                                              "blocks": [{"title": "Q1"}]}), "--at", "1")
+        expect("queue add appends, and --at puts a shift at its place",
+               rc == 0 and rc2 == 0 and [q["id"] for q in saved()["queue"]] == ["m3-ship", "m2-store"], said + said2)
+        rc, said = ed("queue", "move", "m2-store", "1")
+        rc2, said2 = quiet(queue_list, [])
+        expect("queue move and queue list", rc == 0 and [q["id"] for q in saved()["queue"]] == ["m2-store", "m3-ship"]
+               and rc2 == 0 and "1. m2-store" in said2 and "2. m3-ship" in said2, said + said2)
+        rc, said = ed("queue", "rm", "m3-ship", "--note", "folded into M2")
+        expect("queue rm removes it and leaves a note", rc == 0 and [q["id"] for q in saved()["queue"]] == ["m2-store"]
+               and "folded into M2" in saved()["notes"][0]["text"], said)
+        rc, said = ed("milestone", "set", "M1", "--status", "in-progress", "--title", "Skeleton")
+        expect("milestone set --title adds a milestone the list lacks",
+               rc == 0 and saved()["milestones"][-1] == {"id": "M1", "title": "Skeleton", "status": "in-progress", "lane": "",
+                                                         "note": ""}, said)
+        g["SERIES"] = tmp / "series"  # G1's series ends FAIL, PASS, VOID: its latest counted verdict is not PASS
+        was = g["STATE"].read_bytes()
+        rc, said = ed("milestone", "set", "M1", "--status", "done")
+        expect("milestone set done is refused (exit 3) while the checkpoint's lane has not passed, and says so",
+               rc == 3 and "G1 has VOID as its latest counted verdict" in said and "PASS" in said
+               and g["STATE"].read_bytes() == was, said)
+        rc, said = ed("milestone", "set", "M1", "--status", "done", "--force")
+        expect("--force without the user's words is refused", rc == 2 and g["STATE"].read_bytes() == was, said)
+        rc, said = ed("milestone", "set", "M1", "--status", "done", "--force", "--words", "call it done, the VOID was the rig")
+        m1 = saved()["milestones"][-1]
+        expect("--force --words records the user's override",
+               rc == 0 and m1["status"] == "done" and m1["forced"]["words"] == "call it done, the VOID was the rig"
+               and m1["forced"]["verdict"] == "VOID" and m1["lane"] == "G1", said + str(m1))
+        (tmp / "series" / "G1.json").write_text(json.dumps({"points": [{"run_id": "20300113-000000-0001", "verdict": "PASS"}]}),
+                                                encoding="utf-8")
+        rc, said = ed("milestone", "set", "M1", "--status", "done", "--note", "G1 passed")
+        m1 = saved()["milestones"][-1]
+        expect("milestone set done is taken once the lane's latest counted verdict is PASS; the override is dropped",
+               rc == 0 and m1["status"] == "done" and "forced" not in m1 and m1["note"] == "G1 passed", said + str(m1))
+        for what, argv in (("log add with no title", ["log", "add", "--by", "MGR-1"]),
+                           ("log add with a commit that is not a hash", ["log", "add", "--by", "MGR-1", "--title", "t", "--commits", "HEAD"]),
+                           ("log add with a verdict that names no verdict word", ["log", "add", "--by", "MGR-1", "--title", "t", "--verdicts", "G1 passed"]),
+                           ("log add with an unknown slot", ["log", "add", "--by", "MGR-1", "--title", "t", "--slot", "noon"]),
+                           ("now with nothing to set", ["now"]),
+                           ("now with a tree that is not a hash", ["now", "--tree", "main"]),
+                           ("rota set with a bad date", ["rota", "set", "--date", "2030-13-01", "--slot", "day", "--shift", "start"]),
+                           ("rota set with an unknown slot", ["rota", "set", "--date", day0, "--slot", "noon", "--shift", "start"]),
+                           ("rota set with an unknown shift", ["rota", "set", "--date", day0, "--slot", "day", "--shift", "nope"]),
+                           ("rota set with an end that is not a time", ["rota", "set", "--date", day0, "--slot", "day", "--ends", "25:00"]),
+                           ("rota slots with a window longer than a slot", ["rota", "slots", "--rr-min", "2000"]),
+                           ("checkpoint add with no milestone", ["checkpoint", "add", "--lane", "G2"]),
+                           ("checkpoint add for a lane that has one", ["checkpoint", "add", "--lane", "G1", "--milestone", "M1"]),
+                           ("checkpoint set for an unknown lane", ["checkpoint", "set", "G9", "--note", "x"]),
+                           ("blocker add with no owner", ["blocker", "add", "--what", "x"]),
+                           ("blocker add needing an unknown decision", ["blocker", "add", "--what", "x", "--owner", "y", "--needs", "D99"]),
+                           ("blocker rm with no note", ["blocker", "rm", "1"]),
+                           ("checklist done past the end", ["checklist", "done", "9"]),
+                           ("shift set of crew_max without the user's words", ["shift", "set", "--crew-max", "9", "--by", "MGR-1"]),
+                           ("shift set with no --by", ["shift", "set", "--milestone", "M2"]),
+                           ("queue add with an id already used", ["queue", "add", "--file", json.dumps(
+                               {"id": "start", "title": "t", "crew_max": 1, "blocks": [{"title": "b"}]})]),
+                           ("queue add with no crew_max", ["queue", "add", "--file", json.dumps(
+                               {"id": "q9", "title": "t", "blocks": [{"title": "b"}]})]),
+                           ("queue add with a block that has no title", ["queue", "add", "--file", json.dumps(
+                               {"id": "q9", "title": "t", "crew_max": 1, "blocks": [{"time": "x"}]})]),
+                           ("queue add from a file that is not there", ["queue", "add", "--file", str(tmp / "none.json")]),
+                           ("queue rm with no note", ["queue", "rm", "m2-store"]),
+                           ("milestone set for an unknown milestone with no title", ["milestone", "set", "M9", "--status", "planned"]),
+                           ("milestone set with an unknown status", ["milestone", "set", "M1", "--status", "finished"]),
+                           ("an option of another form (checklist add --note)", ["checklist", "add", "--note", "x", "y"]),
+                           ("an unknown form (blocker close)", ["blocker", "close", "1"])):
+            was = g["STATE"].read_bytes()
+            rc, said = ed(*argv)
+            expect(f"{what} is refused (exit 2) and nothing is written", rc == 2 and g["STATE"].read_bytes() == was, f"rc {rc}: {said}")
+        try:
+            result, said = quiet(build)
+            page, err = g["OUT"].read_text(encoding="utf-8"), None
+        except Exception as e:
+            result, page, err = None, "", f"{type(e).__name__}: {e}"
+        expect("the page builds from a state the edit commands wrote: the ticked line, the log entry, the blocker",
+               err is None and "Read the hand-off" in page and "Block 1: the skeleton" in page and "Second blocker" in page, err)
+        g["SERIES"] = proj / "gym" / "series"
+
+        # the freeze marker reads like a counted run in the queue, with no shared resource
+        odir = tmp / "office-freeze"
+        odir.mkdir()
+        t_now = now.timestamp()
+        expect("no freeze.json: the freeze is off", read_freeze(odir, t_now) == FREEZE_OFF)
+        (odir / "freeze.json").write_text(json.dumps({"by": "MGR-1", "why": "a counted run by hand", "lane": "G1",
+                                                      "at": t_now - 600, "max_s": 3600}), encoding="utf-8")
+        fz = read_freeze(odir, t_now)
+        expect("freeze.json: on, with who, why, the lane, since when and its limit; not stale inside the limit",
+               fz == {"on": True, "by": "MGR-1", "why": "a counted run by hand", "lane": "G1", "at": t_now - 600,
+                      "max_s": 3600, "stale": False}, fz)
+        expect("a freeze past its max_s is stale", read_freeze(odir, t_now + 7200)["stale"] is True)
+        (odir / "freeze.json").write_text("{not json", encoding="utf-8")
+        expect("a freeze.json that cannot be read is a freeze by unknown (the safe reading)",
+               read_freeze(odir, t_now)["on"] is True and read_freeze(odir, t_now)["by"] == "unknown")
+        office_fn = getattr(office, "freeze_facts", None)
+        try:
+            g["freeze_facts"] = keep["freeze_facts"]
+            office.freeze_facts = lambda d=None, now=None: {"on": True, "by": "MGR-7", "why": "w", "lane": None,
+                                                           "at": t_now, "max_s": 60, "stale": False}
+            got = freeze_facts(t_now)
+            expect("office.freeze_facts answers when the office has it, in the same shape",
+                   got["on"] is True and got["by"] == "MGR-7" and set(got) == set(FREEZE_KEYS), got)
+        finally:
+            if office_fn is None:
+                del office.freeze_facts
+            else:
+                office.freeze_facts = office_fn
+        g["freeze_facts"] = lambda now=None: fz
+        rc, said = quiet(brief, *build(write=False))
+        j = json.loads(said)
+        expect("brief has `freeze` (the facts) while one is on, and Needs attention says who froze and why",
+               j.get("freeze", {}).get("by") == "MGR-1" and any(a.startswith("[freeze] MGR-1 froze the main checkout")
+                                                               and "a counted run by hand" in a for a in j["attention"]), j.get("attention"))
+        g["freeze_facts"] = lambda now=None: {**fz, "stale": True}
+        attn = [t for _, grp, t, _ in attention(read_state()[0], {}, g["read_crew"]({}, now), {"seats": [], "queue": []}, now)
+                if grp == "freeze"]
+        expect("a stale freeze says DEAD? and how to end it", len(attn) == 1 and "DEAD?" in attn[0] and "freeze off" in attn[0], attn)
+        g["freeze_facts"] = lambda now=None: dict(FREEZE_OFF)
+        rc, said = quiet(brief, *build(write=False))
+        expect("with no freeze, brief has no `freeze` key", "freeze" not in json.loads(said))
+        why, dead = hold_why([{"id": "freeze", "text": freeze_text({**fz, "stale": True}), "dead": True, "freeze": True}])
+        expect("a held edit under a dead freeze is told to end it with office.py freeze off, not force-release",
+               dead and "freeze off" in why and "force-release" not in why and "frozen (MGR-1 froze" in why, why)
+        why, dead = hold_why([{"id": "MGR-1-sweep", "text": "MGR-1-sweep", "dead": False},
+                              {"id": "freeze", "text": freeze_text(fz), "dead": False, "freeze": True}])
+        expect("a sweep and a freeze together are both named", not dead and "MGR-1-sweep" in why and "frozen" in why, why)
+        # a marker whose numbers no clock can show is a freeze by "unknown"; no reader and no line raises on it
+        odd_fz = []
+        for body in (json.dumps({"by": "MGR-1", "at": t_now * 1000, "max_s": 600}), '{"by": "MGR-1", "at": 1e999}',
+                     '{"by": "MGR-1", "at": %d, "max_s": 1e999}' % int(t_now), '{"by": "MGR-1", "at": [1], "max_s": true}'):
+            (odir / "freeze.json").write_text(body, encoding="utf-8")
+            try:
+                got = read_freeze(odir, t_now)
+                odd_fz.append(got["on"] is True and got["by"] == "unknown" and got["at"] is None and bool(got["why"])
+                              and freeze_text(got).startswith("unknown froze the main checkout: "))
+            except Exception as e:
+                odd_fz.append(f"{type(e).__name__}: {e}")
+        expect("a freeze.json with `at` in milliseconds, 1e999, a max_s of 1e999 or a list is a freeze by unknown",
+               odd_fz == [True] * 4, odd_fz)
+        try:
+            line = freeze_text({"on": True, "by": "MGR-1", "at": t_now * 1000, "max_s": float("inf"), "stale": True})
+        except Exception as e:
+            line = f"{type(e).__name__}: {e}"
+        expect("freeze_text guards every time it formats", line == "MGR-1 froze the main checkout (DEAD? it is past its limit)", line)
+
+        # a milestone the list has keeps its lane: another --lane is refused without the user's words
+        was = g["STATE"].read_bytes()
+        rc, said = ed("milestone", "set", "M1", "--status", "done", "--lane", "G7")
+        expect("milestone set --lane on an existing milestone is refused (exit 3), nothing written",
+               rc == 3 and "re-point" in said and g["STATE"].read_bytes() == was, said)
+        rc, said = ed("milestone", "set", "M1", "--status", "planned", "--lane", "G7", "--force", "--words", "judge it on G7")
+        m1 = saved()["milestones"][-1]
+        expect("... and taken with --force --words: `forced` keeps the words and the lane it had",
+               rc == 0 and m1["lane"] == "G7" and m1["forced"].get("lane_was") == "G1"
+               and m1["forced"].get("words") == "judge it on G7", said + str(m1))
+
+        # the roadmap's decisions and milestones: one numbering for decisions, and the state takes the milestones
+        g["ROADMAP"].write_text("\n".join([
+            "| M1 | Skeleton | APP-01 | First |", "| M8 | Polish: the last pass | APP-02 | After M1. Needs D7 |",
+            "| D6 | Release channel | **Decided:** one channel | the user | — |",
+            "| D7 | Storage format | Open: one file, or a folder | the user | M8 |"]) + "\n", encoding="utf-8")
+        road_ms, road_decs = road_plan()
+        expect("road_plan reads the roadmap's milestones and decisions",
+               list(road_ms) == ["M1", "M8"] and road_ms["M8"]["title"] == "Polish: the last pass"
+               and {k: d["state"] for k, d in road_decs.items()} == {"D6": "answered", "D7": "open"}, (road_ms, road_decs))
+        w = road_warnings(saved())
+        expect("the check names the milestone the state lacks and the open decision the register lacks, each with its command",
+               len(w) == 2 and "M8" in w[0] and "milestone sync" in w[0] and "M1," not in w[0]
+               and "decide adopt D7" in w[1] and "D6" not in w[1], w)
+        rc, said = ed("decide", "ask", "--by", "FDR-1", "--question", "After the roadmap's own?")
+        expect("decide ask numbers after the roadmap's highest decision too", rc == 0 and said.startswith("D8 filed"), said)
+        rc, said = ed("decide", "adopt", "D7", "--by", "MGR-1")
+        d7 = saved()["decisions"][0]
+        rc2, said2 = ed("decide", "adopt", "D7")
+        rc3, said3 = ed("decide", "adopt", "D99")
+        expect("decide adopt files the roadmap's decision under its id, once; an id the roadmap lacks is refused",
+               rc == 0 and d7["id"] == "D7" and d7["question"] == "Storage format" and d7["status"] == "open"
+               and d7["needed_before"] == "M8" and d7["by"] == "MGR-1" and rc2 == 2 and rc3 == 2, said + said2 + said3)
+        ed("decide", "answer", "D7", "--words", "one file")
+        w = road_warnings(saved())
+        expect("the check says when the register and the roadmap disagree on an answer",
+               any("disagree" in x and "D7" in x for x in w) and not any("decide adopt" in x for x in w), w)
+        m_was = [m for m in saved()["milestones"]]
+        rc, said = ed("milestone", "sync")
+        m_now = saved()["milestones"]
+        expect("milestone sync adds what the roadmap names and the state lacks, and changes nothing else",
+               rc == 0 and "M8" in said and m_now[:len(m_was)] == m_was
+               and m_now[len(m_was):] == [{"id": "M8", "title": "Polish: the last pass", "status": "planned", "lane": "", "note": ""}],
+               said + str(m_now))
+        rc, said = ed("milestone", "sync")
+        expect("... and a second sync adds nothing", rc == 0 and "nothing to add" in said and saved()["milestones"] == m_now, said)
+        # a planned milestone nothing has touched follows its roadmap row; --prune drops the ones the roadmap dropped
+        g["ROADMAP"].write_text("\n".join([
+            "| M1 | Skeleton | APP-01 | First |", "| M8 | Polish, renamed | APP-02 | After M1 |",
+            "| D7 | Storage format, asked again | Open: one file | the user | M8 |"]) + "\n", encoding="utf-8")
+        ed("milestone", "set", "M7", "--status", "planned", "--title", "Dropped")
+        ed("milestone", "set", "M6", "--status", "planned", "--title", "Kept", "--note", "the user's own")
+        rc, said = ed("milestone", "sync")
+        by_id = {m["id"]: m for m in saved()["milestones"]}
+        expect("milestone sync rewrites the title of an untouched planned milestone and names the ones --prune would drop",
+               rc == 0 and by_id["M8"]["title"] == "Polish, renamed" and "M8 title" in said and "--prune" in said
+               and by_id["M1"]["title"] == "Skeleton" and "M7" in by_id, said)
+        rc, said = ed("milestone", "sync", "--prune")
+        left = [m["id"] for m in saved()["milestones"]]
+        expect("milestone sync --prune removes the planned, untouched one and keeps the one with a note",
+               rc == 0 and "removed M7" in said and "M6 (it has a note)" in said and "M7" not in left and "M6" in left, said)
+        expect("milestone_touched says why a milestone is not the roadmap's alone",
+               [milestone_touched({"checkpoints": [{"milestone": "M2", "lane": "G2"}], "shift": {"milestone": "M3"},
+                                   "log": [{"title": "Block 1: M4 started"}]}, m)
+                for m in ({"id": "M1", "status": "done"}, {"id": "M2"}, {"id": "M3"}, {"id": "M4"}, {"id": "M5", "forced": {"at": "x"}},
+                          {"id": "M40"})]
+               == ["it is done", "it has a checkpoint", "a shift carries it", "the log names it", "it has a forced record", ""])
+        rc, said = ed("decide", "adopt", "D7", "--refresh")
+        expect("decide adopt --refresh leaves an entry a person settled in the register (exit 2)", rc == 2, said)
+        ed("decide", "adopt", "D6")  # the roadmap above no longer names D6: adopt is refused, the register has none
+        saved_decs = saved()["decisions"]
+        g["STATE"].write_text(json.dumps({**saved(), "decisions": [
+            {"id": "D6", "asked": "x", "by": "roadmap", "question": "Old", "status": "answered", "answer": "old", "from": "roadmap"},
+            {"id": "D9", "asked": "x", "by": "roadmap", "question": "Old", "status": "open", "from": "roadmap"}] + saved_decs},
+            ensure_ascii=False), encoding="utf-8")
+        rc, said = ed("decide", "withdraw", "D6", "--note", "the old roadmap's")
+        d6 = next(d for d in saved()["decisions"] if d["id"] == "D6")
+        expect("decide withdraw takes an answered entry adopted from a roadmap that no longer names it",
+               rc == 0 and d6["status"] == "withdrawn" and d6["note"] == "the old roadmap's", said)
+        # the roadmap's own rows: a pipe inside a cell, and an id on two rows
+        g["ROADMAP"].write_text("\n".join([
+            "| M1 | Skeleton | APP-01 | First |", "| M1 | Skeleton again | APP-01 | First |",
+            "| D7 | Storage format | Open: one file | the user | M1 |",
+            "| D8 | Format: one file \\| a folder | Open: undecided | the user | M1 |",
+            "| D7 | Storage format, twice | Open: still | the user | M1 |", "| D9 | too short |"]) + "\n", encoding="utf-8")
+        w = road_shape_warnings()
+        expect("the check names the decisions rows that were not read and the ids two rows carry",
+               len(w) == 3 and "D9" in w[0] and "not read" in w[0] and "milestone row for M1" in w[1]
+               and "decision row for D7" in w[2] and (("D8" in w[0]) != ("D8" in road_plan()[1])), w)
+        expect("row_cells splits a row on the pipes that are not escaped",
+               row_cells("| D8 | one file \\| a folder | Open | the user | M1 |") == ["D8", "one file | a folder", "Open", "the user", "M1"])
+        flow_was = list(_FLOW)
+        _FLOW[:] = [None]  # without flow.py the board reads the rows itself, the escaped pipe included
+        try:
+            own = road_plan()[1]
+            expect("without flow.py the board's own reader takes the row with the escaped pipe",
+                   own.get("D8", {}).get("what") == "Format: one file | a folder" and own["D7"]["state"] == "open", own)
+        finally:
+            _FLOW[:] = flow_was
+        expect("next_decision_id: the highest number's prefix plus one, as wide as it was written; D1 on an empty register",
+               [next_decision_id(x) for x in (["D2", "D12", "D3"], ["D007", "D002"], [], ["D1", "x"])] == ["D13", "D008", "D1", "D2"])
+        expect("the starter roadmap is known by its first line, and the check's roadmap lines are skipped for it",
+               road_is_starter("<!-- STARTER: examples -->\n| M9 | x | y | z |\n") and not road_is_starter("# Roadmap\n")
+               and road_warnings(saved()) != [] and (g["ROADMAP"].write_text("<!-- STARTER: x -->\n| M9 | Later | APP-01 | First |\n",
+                                                                           encoding="utf-8") or True)
+               and road_warnings(saved()) == [], road_warnings(saved()))
+        g["ROADMAP"].unlink()
+
+        # a held edit names its item by what it is, not by a number in a list that will have moved
+        three_bl = {"blockers": [{"what": "alpha"}, {"what": "bravo"}, {"what": "charlie"}]}
+        two_bl = {"blockers": [{"what": "bravo"}, {"what": "charlie"}]}
+        rm2 = ["blocker", "rm", "2", "--note", "n"]
+        ref, why = held_ref(rm2, three_bl, two_bl)
+        expect("held_ref reads `blocker rm 2` against the written state and keeps the blocker's text",
+               why is None and ref == {"kind": "blocker", "arg": 2, "key": "bravo"}, (ref, why))
+        expect("replay_argv finds it again where it is now", replay_argv(rm2, ref, two_bl) == (["blocker", "rm", "1", "--note", "n"], None),
+               replay_argv(rm2, ref, two_bl))
+        expect("... and says so when it is gone, or when two items read the same",
+               "gone" in str(replay_argv(rm2, ref, {"blockers": [{"what": "charlie"}]})[1])
+               and "cannot be told" in str(replay_argv(rm2, ref, {"blockers": [{"what": "bravo"}, {"what": "bravo"}]})[1]))
+        expect("ref_slot knows each form that takes a number",
+               [ref_slot(a) for a in (["checklist", "done", "2"], ["block", "3", "done", "--note", "x"],
+                                      ["checkpoint", "add", "--lane", "G1", "--block", "3"], ["queue", "move", "q3", "2"],
+                                      ["queue", "add", "--file", "{}", "--at", "1"], ["note", "--by", "MGR-1", "2"])]
+               == [("checklist", 2), ("block", 1), ("block", 5), ("queue", 3), ("queue-at", 5), None])
+        guard_env = os.environ.get("FOUNDRY_SWEEP_GUARD")
+        os.environ["FOUNDRY_SWEEP_GUARD"] = "1"
+        g["pending_file"] = lambda: tmp / "held-office" / "pending-state.jsonl"
+        g["read_pending"] = keep["read_pending"]
+        try:
+            for what in ("alpha", "bravo"):
+                ed("blocker", "add", "--what", what, "--owner", "EMP-1")
+            names = [b["what"] for b in saved()["blockers"]]
+            t_held = dt.datetime.now().astimezone()
+            rcs = [quiet(hold_edit, ["blocker", "rm", str(n), "--note", "n"], t_held)[0] for n in (len(names) - 1, len(names))]
+            again = quiet(hold_edit, ["blocker", "rm", str(len(names)), "--note", "n"], t_held)
+            lines = read_pending()
+            expect("two held blocker rm, each with an id and the text its number named; a third of the same one is refused",
+                   rcs == [0, 0] and again[0] == 2 and "gone" in again[1] and [h["ref"]["key"] for h in lines] == ["alpha", "bravo"]
+                   and len({h["id"] for h in lines}) == 2, (rcs, again, lines))
+            n_done, said = quiet(apply_pending)
+            s1 = saved()
+            expect("the replay removes those two, writes the last id into `_applied` and empties the file",
+                   n_done == 2 and [b["what"] for b in s1["blockers"]] == names[:-2] and s1.get("_applied") == lines[-1]["id"]
+                   and not pending_file().exists(), said)
+            write_pending(lines[-1:])  # as a run cut between the state's write and the file's would leave it
+            n_done, said = quiet(apply_pending)
+            expect("a held edit whose id the state already has is dropped, not applied again",
+                   n_done == 0 and "not applied twice" in said and saved()["blockers"] == s1["blockers"]
+                   and not pending_file().exists(), said)
+        finally:
+            g["read_pending"] = lambda: []
+            if guard_env is None:
+                os.environ.pop("FOUNDRY_SWEEP_GUARD", None)
+            else:
+                os.environ["FOUNDRY_SWEEP_GUARD"] = guard_env
+
+        # a stage's exit cell is read by flow.py's reader: short lists, runs, "every P0", the goal row
+        fl = flow_tool()
+        expect("flow.py loads beside board.py", fl is not None, FLOW_ERROR)
+        if fl is not None:
+            tier, goal = fl.TOP, fl.GOAL
+            g["ROADMAP"].write_text("\n".join([
+                "| **R0 Usable** | theme | APP-01, 03; DATA-01–02 (basic) | M1 | x |",
+                f"| **{goal} Release** | goal | every {tier}; DOC-01, ZZ-09 | M3 | x |",
+                f"| APP-01 | {tier} | Part | M1 | x |", f"| APP-02 | {tier} | Planned | M1 | x |",
+                f"| APP-03 | {tier} | Decided | M1 | x |", f"| DATA-01 | {tier} | Open | M2 | x |",
+                f"| DATA-02 | {tier} | Planned | M2 | x |", f"| DOC-01 | {TIERS[-1]} | Planned | M3 | x |"]) + "\n", encoding="utf-8")
+            reqs_, stages_ = read_roadmap()
+            by = {s["id"]: s for s in stages_}
+            expect("a short list and a run with a remark are read ('APP-01, 03; DATA-01–02 (basic)')",
+                   by.get("R0", {}).get("ids") == ["APP-01", "APP-03", "DATA-01", "DATA-02"] and by["R0"]["met"] == 1, by.get("R0"))
+            want = [i for i, (p, _) in reqs_.items() if p == tier] + ["DOC-01", "ZZ-09"]
+            expect("the goal row is a stage: every first-tier ID, the IDs beside it, and an ID with no row kept as missing",
+                   by.get(goal, {}).get("ids") == list(dict.fromkeys(want)) and by[goal]["counts"]["missing"] == 1
+                   and [s["id"] for s in stages_] == ["R0", goal], by.get(goal))
+            w = consistency(read_state()[0], {}, {"head": "?", "dirty": []}, now, g["read_crew"]({}, now))
+            expect("an exit ID with no requirement row still warns", any("names ZZ-09" in x for x in w), w)
+            ref = fl.parse_roadmap(g["ROADMAP"].read_text(encoding="utf-8"))[1]
+            expect("the board's exit IDs are flow.py's (plus the missing ones)",
+                   set(by) == set(ref) and all([i for i in by[k]["ids"] if i in reqs_] == ref[k]["ids"] for k in by), ref)
+            g["ROADMAP"].unlink()
+
+        # printed commands are relative to the checkout unless the profile asks for the host's paths
+        if not P.get("board.absolute_commands", False) and not Path(P.rel("tools")).is_absolute():
+            expect("the map's command lines are relative to the checkout",
+                   BOARD.endswith(f"{P.rel('tools').rstrip('/')}/board.py") and P.main.as_posix() not in BOARD
+                   and (bool(P.get("commands.python")) or BOARD.startswith("python ")), BOARD)
+            expect("... on the page and in the check's hints too",
+                   P.tool("board.py") not in page and f"{esc(BOARD)} check" in page, BOARD)
         expect("the selftest's project folder holds only its state and its map",
                sorted(p.name for p in proj.rglob("*") if p.is_file()) == ["progress-map.html", "state.json"],
                str(sorted(p.name for p in proj.rglob("*"))))
@@ -3037,39 +5038,46 @@ def main(argv):
         # counted run samples). Read-only: no held edit is applied, nothing is written.
         print("the map was NOT rebuilt: check --no-build reads only")
         return check(*build(write=False), rebuilt=False)
-    sweeps = sweep_hold()
+    if cmd == "queue" and argv[2:3] == ["list"]:
+        return queue_list(argv[3:])  # reads only
+    sweeps = counted_holds()
     if cmd == "pending":
         held = read_pending()
-        print(f"{len(held)} edit(s) held" + (f"; counted sweep in the resource queue: {', '.join(r['text'] for r in sweeps)}" if sweeps else
-                                             "; no counted sweep: the next build, check, note, usage or block run in "
-                                             "the main checkout applies them"))
+        runs = [r["text"] for r in sweeps if not r.get("freeze")]
+        frz = [r["text"] for r in sweeps if r.get("freeze")]
+        print(f"{len(held)} edit(s) held"
+              + (f"; counted sweep in the resource queue: {', '.join(runs)}" if runs else "")
+              + (f"; frozen: {frz[0]}" if frz else "")
+              + ("" if sweeps else "; no counted sweep and no freeze: the next build, check or edit command run in "
+                 "the main checkout applies them"))
         for h in held:
-            print(f"  {h.get('at')}  {' '.join(map(str, h.get('argv', [])))}" + (f"   FAILED: {h['failed']}" if h.get("failed") else ""))
+            if "_raw" in h:
+                print(f"  UNREADABLE line, kept and skipped: {h['_raw'][:120]}")
+                continue
+            ref = h.get("ref") if isinstance(h.get("ref"), dict) else {}
+            print(f"  {h.get('at')}  {' '.join(map(str, h.get('argv', [])))}"
+                  + (f"   (the {REF_WORDS.get(ref.get('kind'), 'item')}: {str(ref['key'])[:60]})" if ref.get("key") else "")
+                  + (f"   FAILED: {h['failed']}" if h.get("failed") else ""))
         return 0
     why_wt = worktree_write_refusal(cmd, ROOT, P.main, write_targets(cmd, STATE, OUT))
     if why_wt:
         print(f"refused: {why_wt}")
         return 3
     if sweeps:
-        dead = all(r["dead"] for r in sweeps)
-        why = (f"a counted sweep is in the resource queue ({', '.join(r['text'] for r in sweeps)}): nothing in this "
-               "checkout may change until it ends"
-               + (f"; it looks DEAD (did the host restart?): check {RQ} status, and if no sweep is running, the manager "
-                  f"frees its seats with {RQ} force-release" if dead else ""))
+        why, dead = hold_why(sweeps)
         if cmd in ("promote", "init"):
             print(f"refused: {why}")
             return 3
         if cmd in EDITS:
-            rc = edit_state(argv[1:], write=False)
-            if rc:
-                return rc
             try:
-                hold_edit(argv[1:], dt.datetime.now().astimezone())
+                rc = hold_edit(argv[1:], dt.datetime.now().astimezone())
             except office.Refused as e:
                 print(f"NOT held and not written: {e}. {why}. Run the command again.")
                 return 5
+            if rc:
+                return rc
             print(f"held, not written: {why}. It is applied with this time by the next writing command run in the main "
-                  "checkout after the sweep (board.py pending lists what is held).")
+                  "checkout after it ends (board.py pending lists what is held).")
             return 4 if dead else 0
         result = build(write=False)
         print(f"the map was NOT rebuilt: {why}")

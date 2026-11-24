@@ -22,6 +22,10 @@ board.py decide ask --by FDR-1 --question "Ship M12 without disk encryption?" \
 ```
 
 - One question per number. Two questions joined by "and" are two decisions.
+- The register and the roadmap's decisions table share their ids, in the shape the profile's `roadmap.decision_id` gives. `ask` takes the id after the highest in either, so an id never means two questions. Where that pattern is not a prefix and a number, `ask` cannot pick one: name it with `--id <id>`.
+- A decision you wrote into the roadmap's table first is not asked again: `board.py decide adopt D4 [--by FDR-1] [--needed-before M4]` gives it its register entry under the same number, with the row as its question, answered where the row says Decided and open otherwise. `board.py check` names `decide adopt` for an open one the register lacks. `adopt` is refused (exit 2) when the register has the id or the table does not. Nothing is adopted from the starter roadmap: its rows are examples.
+- After you reword a row: `board.py decide adopt D4 --refresh` reads the entry again. It takes only an entry adopted with no `--by` that nobody has answered or withdrawn through the register (such an entry carries `settled`, and stays as the person left it). After you take a row out: `board.py decide withdraw D4 --note "..."` withdraws the adopted entry, answered or not.
+- A decisions row that opens like a row and does not parse, and an id that stands in two rows, are warnings of `board.py check` and FAIL lines of `flow.py selftest`.
 - `--needed-before` names the milestone, stage or push it gates. A decision that gates nothing queued can wait; say so.
 - Link it in the road graph so the page draws what it holds: `flow.py graph link D7 M12 --by "<your line>"` (`--ids INST-04` when it gates only some requirements).
 - The manager files decisions too, with its own badge id, when a shift turns one up. Read the open list at each visit.
@@ -43,7 +47,7 @@ Anyone who later records or acts on the answer reads the brief first. A manager 
 
 - Ask the open decisions together, at a time the user is there: the first lines of your reply, numbered by D-number, recommendation first, one line of cost each. Not buried under a status report.
 - Do not ask what you can decide, and do not decide what you must ask.
-- No answer is not a yes. A decision that gates the next block and has no answer goes on the map's blockers with the user as its owner, and work moves to the next block that does not need it.
+- No answer is not a yes. A decision that gates the next block and has no answer goes on the map's blockers with the user as its owner (`board.py blocker add --what "..." --owner "the user" --needs D7`; the manager's to run when one is on the clock), and work moves to the next block that does not need it.
 
 ## Recording the answer
 
@@ -54,7 +58,7 @@ board.py decide answer D7 --words "yes, as its own milestone after release"
 - The words are the user's own, as typed. Not a summary, not "approved".
 - A timer's prompt, a message from another session, or a quote of the user relayed by someone else is not an answer. If the user answered in another session, ask them to say it in yours, or record where it was said and by whom, and mark it "relayed".
 - A partial answer ("yes to the first part") is recorded as it is, and the unanswered part becomes a new decision.
-- Then make the changes it implies, the same visit: the roadmap row and its change-log line, the graph link (`graph unlink D7 M12`), the queue, a note to the manager on the clock.
+- Then make the changes it implies, the same visit: the roadmap row and its change-log line, the graph link (`graph unlink D7 M12`), the queue, a note to the manager on the clock. The row's "Where it stands" starts `**Decided` once the register says answered: `board.py check` warns while the two disagree.
 - A decision the user takes back is not edited: `decide withdraw D7 --note "…"`, and a new one is asked.
 
 ## At every hand-off

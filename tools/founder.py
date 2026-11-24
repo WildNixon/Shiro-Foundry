@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Shiro Foundry: the founder's own tool.
 
-    python founder.py init [--project NAME] [--resource NAME]
+    python founder.py init [--project NAME] [--resource NAME] [--gym]
                                  found a project: write the starter profile (.foundry/foundry.toml), the rules
                                  file, a starter roadmap, the state (through board.py init) and the git-ignore
-                                 lines for the office and the built pages. Never overwrites: a file that exists
-                                 is kept and named
+                                 lines for the office and the built pages. --gym also scaffolds a starter gym
+                                 (gym_init.py init). Never overwrites: a file that exists is kept and named
     python founder.py doctor [--selftest]
                                  is the foundry installed and whole: the interpreter, the profile, every tool,
                                  every skill, the office ignored by git, the state, the roadmap, the hooks.
@@ -38,8 +38,9 @@ sys.path.insert(0, str(HERE))
 import foundry_profile as fp  # noqa: E402
 
 TOOLS = ("foundry_profile.py", "founder.py", "office.py", "rq.py", "board.py", "journal.py", "flow.py",
-         "flow_graph.py", "flow_page.py", "plan_flow.py", "lanes_for.py")
-SELFTESTS = ("foundry_profile.py", "founder.py", "office.py", "rq.py", "board.py", "journal.py", "plan_flow.py")
+         "flow_graph.py", "flow_page.py", "plan_flow.py", "lanes_for.py", "sweep.py", "gym_init.py")
+SELFTESTS = ("foundry_profile.py", "founder.py", "office.py", "rq.py", "board.py", "journal.py", "plan_flow.py",
+             "sweep.py")
 SKILLS = ("founder", "manager", "employee", "flow", "bench", "gym")
 MET = ("PASS", "Decided")
 STARTER_BANNER = ("<!-- STARTER: every row below is an example of the shape the tools read. "
@@ -113,7 +114,7 @@ def set_toml_value(text, section, key, value):
 
 
 def cmd_init(argv):
-    P = fp.load()
+    P = fp.load(strict=False)
     root = P.main
     project = opt(argv, "--project") or P.project
     resource = opt(argv, "--resource")
@@ -151,15 +152,20 @@ def cmd_init(argv):
     gi = root / ".gitignore"
     have = gi.read_text(encoding="utf-8") if gi.is_file() else ""
     add = []
-    for name in ("office", "flow_out"):
-        rel = P.rel(name).rstrip("/")
-        if Path(rel).is_absolute():
+    # the office, the built pages, and the folder the crew's worktrees live in: an untracked worktree folder would
+    # make the main checkout read as dirty to every counted run
+    for rel in (P.rel("office"), P.rel("flow_out"), str(P.get("git.worktrees") or ""),
+                "out/sweeps",                            # sweep.py's --out folders must be git-ignored
+                "out/gym" if "--gym" in argv else ""):  # the gym runner's run folders
+        rel = rel.replace("\\", "/").strip("/")
+        if not rel or Path(rel).is_absolute():
             continue
         if ignored(root, rel) is not True and f"/{rel}/" not in have.split():
             add.append(f"/{rel}/")
     if add:
         with open(gi, "a", encoding="utf-8", newline="\n") as f:
-            f.write(("" if have.endswith("\n") or not have else "\n") + "# Shiro Foundry: the crew office and built pages\n"
+            head = "# Shiro Foundry: the crew office, built pages, run folders and crew worktrees\n"
+            f.write(("" if have.endswith("\n") or not have else "\n") + ("" if "# Shiro Foundry:" in have else head)
                     + "\n".join(add) + "\n")
         out.append(f"added   .gitignore: {', '.join(add)}")
 
@@ -174,6 +180,15 @@ def cmd_init(argv):
     else:
         out.append("PROBLEM board.py is not beside founder.py: the state was not written")
 
+    if "--gym" in argv:  # the smallest gym the tools can read, for the first grader to start from
+        gi_tool = HERE / "gym_init.py"
+        if gi_tool.is_file():
+            code, so, se = run([sys.executable, str(gi_tool), "init"], root)
+            for line in (so or se).strip().splitlines():
+                out.append(("        " if code == 0 else "PROBLEM ") + line.strip())
+        else:
+            out.append("PROBLEM gym_init.py is not beside founder.py: the gym was not scaffolded")
+
     for line in out:
         print(line)
     print("\nNext: `founder.py doctor`, then the goal and the requirements with the user (/foundry-founder found).")
@@ -183,7 +198,7 @@ def cmd_init(argv):
 # -------------------------------------------------------------------------------------------------------- doctor
 
 def cmd_doctor(argv):
-    P = fp.load()
+    P = fp.load(strict=False)
     root, lines = P.main, []
 
     def say(kind, text):
@@ -194,7 +209,7 @@ def cmd_doctor(argv):
         + ("" if v >= (3, 11) else ": 3.11 or newer is needed (tomllib)"))
     if P.file:
         say("ok", f"profile {P.file}")
-    else:
+    elif not P.problems:
         say("note", "no .foundry/foundry.toml: the defaults are in force (`founder.py init` writes one)")
     for prob in P.problems:
         say("PROBLEM", f"profile does not parse: {prob}")
@@ -202,11 +217,16 @@ def cmd_doctor(argv):
     here_is_tools = tools.resolve() == HERE
     if not here_is_tools:
         say("note", f"this founder.py runs from {HERE}, not from paths.tools ({tools}): briefs will name paths.tools")
+    missing = 0
     for t in TOOLS:
         if not (HERE / t).is_file():
             say("PROBLEM", f"tool missing beside founder.py: {t}")
+            missing += 1
         elif not here_is_tools and not (tools / t).is_file():
             say("PROBLEM", f"tool missing in paths.tools: {t} (run install.py for this project)")
+            missing += 1
+    if not missing:
+        say("ok", f"tools: all {len(TOOLS)} present in {P.rel('tools')}")
     home = Path(os.environ.get("FOUNDRY_HOME") or Path.home()) / ".claude" / "skills"
     for level in SKILLS:
         name = P.skill(level)
@@ -224,6 +244,10 @@ def cmd_doctor(argv):
             say("note", f"not a git repository here: cannot check that {rel} is ignored")
         else:
             say("ok", f"paths.{name} ({rel}) is outside git's view")
+    wt = str(P.get("git.worktrees") or "").replace("\\", "/").strip("/")
+    if wt and not Path(wt).is_absolute() and ignored(root, wt) is False:
+        say("PROBLEM", f"git.worktrees ({wt}) is not git-ignored: the first crew worktree would make the main checkout "
+                       "read as dirty to a counted run (add it to .gitignore)")
     say("ok" if P.path("state").is_file() else "PROBLEM",
         f"state {P.rel('state')}" + ("" if P.path("state").is_file() else " is missing (`board.py init`)"))
     if P.path("state").is_file() and read_json(P.path("state")) is None:

@@ -11,7 +11,7 @@ Two kinds of chart, one canvas. Each has one source and one tool. The pages are 
 
 **How commands are written here.** Tools are run as `<py> <tools>/flow.py ...`, where `<py>` is the interpreter the profile names (`commands.python`) and `<tools>` is `paths.tools` (default `scripts/foundry`) in the main checkout; a brief printed by `office.py hire` carries both resolved, so an employee copies the paths from its brief. After this line the skill writes them short: `flow.py build`, `plan_flow.py list`. "Your badge line" is the whole signed line you clocked in with.
 
-**Option forms differ between the two tools.** `plan_flow.py` and the plain `flow.py` commands read an option only as one word joined by `=`: `--title="..."`, `--question="..."`, `--by="<badge line>"`, `--out=<dir>`, `--root=<dir>`. Written with a space (`--by "<line>"`), the value is taken for a name and the command fails or prints its usage. `flow.py graph ...` reads options the ordinary way, with a space: `--by "<badge line>"`, `--why "..."`, `--ids A-01,B-02`, `--note "..."` (the `=` form works there too).
+**Option forms.** `plan_flow.py` and `flow.py graph ...` read an option's value either way: after a space (`--title "..."`, `--by "<badge line>"`, `--why "..."`, `--ids A-01,B-02`) or joined by `=` (`--title="..."`). The plain `flow.py` commands (`build`, `brief`, `edges`, `selftest`) take only two options, and only joined by `=`: `--out=<dir>` and `--root=<dir>`.
 
 | Chart | Answers | Its source | Tool | Page |
 |---|---|---|---|---|
@@ -27,28 +27,33 @@ A project may add a third chart of its own: a reader that draws the system as bu
 | | Founder | Manager | Crew (any other badge) |
 |---|---|---|---|
 | Road graph | Owns its shape: seeds it once, decides its nodes and gates. Edits through `flow.py graph ... --by` | Keeps it true during a shift (a decision answered, a block reordered, a seeded link checked). Edits through `flow.py graph ... --by` | Reads only: `graph show`, `graph trace`, `graph verify`, `flow.py brief`, the page. Never a command that takes `--by`; never the two files |
-| Plan chart | Makes and edits plans for the roadmap and a push (`plan_flow.py new`, `build`); in the main checkout with its own badge (`--by="<founder's line>"`), or in its own worktree with none | Makes it (`plan_flow.py new`), edits the plan file, reads it | Reads. Makes or edits a plan file only when the brief names that one file, and only in its own worktree |
+| Plan chart | Makes and edits plans for the roadmap and a push (`plan_flow.py new`, `build`); in the main checkout with its own badge (`--by "<founder's line>"`), or in its own worktree with none | Makes it (`plan_flow.py new`), edits the plan file, reads it | Reads. Makes or edits a plan file only when the brief names that one file, and only in its own worktree |
 
-- A hook refuses a direct write to the road graph's two files from anyone, founder and manager included, and `office.py handin` sends back a branch that changes them. A hand edit shows as TAMPERED in `flow.py selftest` and on the page.
+- A hook refuses a direct write to the road graph's two files from anyone, founder and manager included: a write that names a file, and a shell command that removes, moves or replaces them through their folder (`rm -rf` of it, a copy into it, `git checkout .`, `git restore .`, `git clean`, `git stash push` with a pathspec that covers it). `office.py handin` sends back a branch that changes them. A hand edit shows as TAMPERED in `flow.py selftest` and on the page. The hook protects the two files under the profile's `paths.flow`, wherever that is, unless the profile's `hooks.protect` lists other files.
 - A plan file has no hook: `office.py handin` flags one changed outside the badge's files. So a brief names the one plan file (`<paths.flow>/NAME.plan.toml`), never the whole flow folder.
-- Any `plan_flow.py` write that would land in the main checkout (`new` there, a `build` there, or an `--out` that points into it) takes the badge of the roster's manager or of the founder (`--by="<badge line>"`, the same two badges `flow.py graph` takes) and refuses anyone else (exit 2), so a crew member's plan or page cannot land there.
+- Any `plan_flow.py` write that would land in the main checkout (`new` there, a `build` there, or an `--out` that points into it) takes the badge of the roster's manager or of the founder (`--by "<badge line>"`, the same two badges `flow.py graph` takes) and refuses anyone else (exit 2), so a crew member's plan or page cannot land there.
 - An employee who sees a wrong link, a missing step or a stale chart messages the manager; it does not fix the chart. A manager who thinks the graph's shape is wrong (a milestone missing from the roadmap, a gate that should not exist) writes a proposal for the founder; the roadmap is not the manager's to edit.
 
 ## The freeze comes first
 
-While a counted run or a sweep is in the resource queue, waiting or running (`office.py roster` or `board.py brief` shows it), nothing in the main checkout changes. For the charts that means: no `graph` edit, no `plan_flow.py new`, no edit of a plan file, no commit or merge under the flow folder, by anyone. Reading goes on (`show`, `trace`, `list`, `selftest`, `brief`), and so do builds, which write only under the git-ignored `paths.flow_out`. Note the edits a build calls for and make them when the run has ended and its records are committed.
+While a counted run or a sweep is in the resource queue, waiting or running, or the manager's freeze is on (`office.py freeze on`; `office.py roster`, `office.py freeze show` or `board.py brief` shows either), nothing in the main checkout changes. For the charts that means: no `graph` edit, no `plan_flow.py new`, no edit of a plan file, no commit or merge under the flow folder, by anyone. Reading goes on (`show`, `trace`, `list`, `selftest`, `brief`), and so do builds, which write only under the git-ignored `paths.flow_out`. Note the edits a build calls for and make them when the run has ended and its records are committed.
 
-`plan_flow.py` helps with its own writes only: when the queue shows a counted run it refuses `new` in the main checkout even with your badge, and lets a build write only under the git-ignored output folder. It knows a counted run by its queue id (`<badge>-sweep`, `<badge>-counted-<lane>`) or prio 0, and refuses when it cannot read the queue. (`office.py` and `board.py` go by the id alone: a prio-0 job under a plain id is only `COUNTED?` to them.) A whole-resource job under a plain id (the roster's `COUNTED?`) only gets a note: if it is a counted run, the freeze is kept by hand. A hand edit of a plan file, a `graph` edit and a commit are not checked by any tool. The rule is yours to keep; the tool is a second pair of eyes, not the rule.
+The tools refuse their own writes in the main checkout during a freeze:
 
-A project that counts no runs has no freeze. A project that counts runs but names no shared resource has no queue for the tools to read: `plan_flow.py`, `board.py` and `office.py` then see no counted run and refuse nothing, and the freeze is kept by hand, from the moment the manager says a counted run is going until it says its records are committed.
+- `flow.py graph seed`, `link`, `unlink`, `confirm`, `node` and `undo` are refused (exit 3, one line naming the freeze), even with your badge. `graph show`, `trace` and `verify` only read and always run.
+- `plan_flow.py` refuses `new` there even with your badge (exit 3), and lets a build write only under the git-ignored output folder.
+
+In a worktree nothing is frozen. Both know a freeze by the same rule `office.py` and `board.py` use: a counted run's queue id (`<badge>-sweep`, `<badge>-counted[-<lane>]`), never its priority alone, or the office's freeze (`office.py freeze on`, or a sweep's own). Both refuse when they cannot read the queue or the freeze. A prio-0 or whole-resource job under a plain id (the roster's `COUNTED?`) only gets a note: if it is a counted run, the manager turns the freeze on. A refused edit is not held: make it after the freeze. A hand edit of a plan file and a commit are not checked by any tool. The rule is yours to keep; the tool is a second pair of eyes, not the rule.
+
+A project that counts no runs has no freeze. A project that counts runs but names no shared resource has no queue: there the manager's `office.py freeze on` is the freeze, from before the counted run starts until its records are committed, and `plan_flow.py`, `board.py` and `office.py` all read it.
 
 ## Make a chart (founder or manager)
 
 - **The road graph** is made once: `flow.py graph seed --by "<badge line>"` writes the links the roadmap's prose implies today, each marked unconfirmed (drawn faint). After that it is only edited. Until it is seeded, the order is guessed from the roadmap's prose, and the page says so.
 - **A plan chart** for a design, a push or a block of work that needs judging before it is hired out:
-  1. `plan_flow.py new NAME --title="What the plan is about" --question="What the user must judge" --by="<badge line>"` writes `<paths.flow>/NAME.plan.toml` from the template (it never overwrites). NAME is lower-case letters, digits and dashes.
+  1. `plan_flow.py new NAME --title "What the plan is about" --question "What the user must judge" --by "<badge line>"` writes `<paths.flow>/NAME.plan.toml` from the template (it never overwrites). NAME is lower-case letters, digits and dashes.
   2. Write the plan in that file: `[[stage]]` tables in order, `[[step]]` tables (each with its `stage`, `state`, `effort`, `confidence` and the steps it `needs`), `[[decision]]` tables for what is the user's (with the stages each `gates`), `[[lane]]` tables for the gym lanes that would close a stage. The template's comments say what each key means. Give a step an `anchor` (a file and a text it must hold) wherever the plan rests on something in the tree, so the selftest fails when the tree moves.
-  3. `plan_flow.py selftest NAME` until it prints 0 problems, then `plan_flow.py build NAME --by="<badge line>"`.
+  3. `plan_flow.py selftest NAME` until it prints 0 problems, then `plan_flow.py build NAME --by "<badge line>"`.
   4. Outside a freeze, commit the plan file like any other doc: `git add -- <paths.flow>/NAME.plan.toml`. The page is under the git-ignored output folder and is never committed.
 
   A scout can write the plan for you: name the plan file in its brief and make "selftest prints 0 problems" part of done-when. The scout runs `new` in its own worktree (no badge is asked there), commits the file on its branch, and the manager merges it.
@@ -57,7 +62,7 @@ A plan chart is a plan. A step's `state = "have"` is a claim checked only by its
 
 ## Edit the road graph (founder or manager)
 
-Only through `flow.py graph ... --by "<badge line>"`, and never during a freeze. Commit the two files with the map; the tool commits nothing.
+Only through `flow.py graph ... --by "<badge line>"`, and never during a freeze (in the main checkout the tool refuses, exit 3). Commit the two files with the map; the tool commits nothing.
 
 | When | Run |
 |---|---|
@@ -65,10 +70,10 @@ Only through `flow.py graph ... --by "<badge line>"`, and never during a freeze.
 | You have checked a seeded link against the roadmap | `graph confirm M1 M2 --why "needs M1's storage layout" --by LINE`; a wrong one leaves with `graph unlink M1 M2 --by LINE` |
 | The user decides something, or a "needs" changes | `graph link D3 M5 --by LINE` (a decision gating only some requirement ids: `--ids REQ-06`); `graph unlink` when a gate falls away |
 | Planning or reordering a push | `graph trace M6 --up` for everything it waits on; `graph link A B --by LINE` when an order is not what the map's list and titles say |
-| The roadmap gained or lost a milestone, decision or stage | `flow.py selftest` names each: `graph node add M9 --by LINE` (`--type`, `--note`), `graph node set M9 --note "..." --by LINE`, or `graph node rm M9 --by LINE` after its links are unlinked |
+| The roadmap gained or lost a milestone, decision or stage | `flow.py selftest` names each: `graph node add M9 --by LINE` (`--type`, `--note`), `graph node set M9 --note "..." --by LINE`, or `graph node rm M9 --by LINE` after its links are unlinked. The state follows the roadmap too: `board.py milestone sync` lists a new milestone and refreshes a planned, untouched one (`--prune` removes one the roadmap dropped), `board.py decide adopt D<n>` gives a new decision of the roadmap's table its register entry and `--refresh` reads a reworded row again (`board.py check` names what is missing) |
 | Writing a brief for a milestone | `graph show M3`, and name the node in the brief so the employee reads the same links |
 | The last edit was wrong | `graph undo --by LINE` (again: puts it back) |
-| selftest or the page says TAMPERED | Stop editing. `graph verify` names the entry. Find who changed the file (`git log -- <paths.flow>`) and file a failure. The hook refuses only a direct write that names the graph files; a folder-level git restore is not caught, so the restore is the user's own step: ask the user to run `git checkout <last good sha> -- <paths.flow>` themselves, then `graph verify` |
+| selftest or the page says TAMPERED | Stop editing. `graph verify` names the entry. Find who changed the file (`git log -- <paths.flow>`) and file a failure. The hook refuses a restore of the files or of their folder from any agent's shell, yours too, so the restore is the user's own step: ask the user to run `git checkout <last good sha> -- <paths.flow>` themselves, then `graph verify` |
 
 ## Edit a plan chart
 
@@ -78,12 +83,12 @@ Outside a freeze, edit `<paths.flow>/NAME.plan.toml`, then `plan_flow.py selftes
 
 | When | Run |
 |---|---|
-| Slot start, and every hand-off | `flow.py build` and `plan_flow.py build --by="<badge line>"` (every plan). Read `flow.py build`'s findings: what is ready to start, which decisions gate the most work, where work has waited longest, usage against the stop |
-| While the crew waits on the shared resource | The same builds. The edits they call for too, unless the resource is busy with a counted run: then the freeze holds, and the edits wait |
+| Slot start, and every hand-off | `flow.py build` and `plan_flow.py build --by "<badge line>"` (every plan). Read `flow.py build`'s findings: what is ready to start, which decisions gate the most work, where work has waited longest, usage against the stop |
+| While the crew waits on the shared resource | The same builds. The edits they call for too, unless the resource is busy with a counted run or a freeze is on: then the edits wait |
 | Planning or reordering a push | `flow.py graph trace M6 --up` |
 | Writing a brief for a milestone | `flow.py graph show M3`; name the node in the brief |
 | Writing a brief for a step of a plan | `plan_flow.py show NAME <ID>` and `plan_flow.py trace NAME <ID> --up`; name the plan and the step in the brief |
-| After a roadmap edit (the founder's) | `flow.py selftest`. It fails when a row no longer parses, a count table disagrees with the rows, a decision's state wording is unknown, an input could not be read or held records of the wrong shape (the line says which), or the road graph was changed by hand or no longer names the roadmap's milestones, decisions and stages. `flow.py edges` prints the graph as parsed, to check an edit kept its shape |
+| After a roadmap edit (the founder's) | `flow.py selftest`. It fails when a row no longer parses (a milestone or decision row that opens like a row and does not parse is named by its line, and so is an id in two rows), a count table disagrees with the rows, a decision's state wording is unknown, an input could not be read or held records of the wrong shape (the line says which), or the road graph was changed by hand or no longer names the roadmap's milestones, decisions and stages. `flow.py edges` prints the graph as parsed, to check an edit kept its shape |
 | Before a hand-off, and after any plan edit | `plan_flow.py selftest` (every plan); a problem line is fixed in the plan file or filed |
 | Asking the user to decide | `plan_flow.py list`, then show them the plan's page: its questions view is what is theirs |
 
@@ -100,7 +105,7 @@ Everything here writes nothing to the tree and needs no badge.
 | One step of a plan your brief names: what goes in, what comes out, what must be done first | `plan_flow.py show NAME <ID>`, `plan_flow.py trace NAME <ID> --up` |
 | Every link of a plan, then its problems | `plan_flow.py edges NAME` |
 | Which plans exist | `plan_flow.py list` |
-| A page to look at | Run from your own worktree, `plan_flow.py build NAME` writes under its output folder (`--out=<dir>` for anywhere else). `plan_flow.py` works on the checkout your shell stands in, and refuses to write in the main checkout without the manager's or the founder's badge, an `--out` that points there included |
+| A page to look at | Run from your own worktree, `plan_flow.py build NAME` writes under its output folder (`--out <dir>` for anywhere else). `plan_flow.py` works on the checkout your shell stands in, and refuses to write in the main checkout without the manager's or the founder's badge, an `--out` that points there included |
 
 How to use what you read:
 

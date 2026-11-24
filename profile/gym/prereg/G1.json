@@ -1,0 +1,44 @@
+{
+  "status": "TEMPLATE: not registered. The grader fills every <...> and every null below, sets this to \"registered\", and commits the file before any counted data exists. gym/run.py refuses a counted run until then.",
+  "prereg_id": "G1-v1-<the question in 3-5 words>",
+  "lane": "G1",
+  "title": "Example: the answers are the medians, and beat the mean",
+  "written_at": "<ISO-8601 time with UTC offset>",
+  "written_by": "<the grader's badge id: never the builder's, never the manager who directed the build>",
+  "written_before": "<proof that no counted data existed, e.g. 'gym/series/G1.json held no point'>",
+  "supersedes": null,
+  "question": "<Does the thing under test do the task, as it ships?>",
+  "null": "the mean of each unit's values: the strongest answer that knows nothing the thing under test is meant to know",
+  "unit_of_inference": "one distinct list of values; a list seen twice counts once",
+  "statistic": "headline = percent of units answered right; delta = answers minus the null, in points, paired by unit",
+  "estimator": "paired bootstrap resampling distinct units, B = 2000, seed 0 (gym_kit.paired_bootstrap)",
+  "min_n": {"units": null, "comment": "the grader sets this before any counted data: the fewest units a verdict may rest on"},
+  "bars": [
+    {"id": "b1", "what": "headline >= threshold, in percent", "kind": "guard", "threshold": null,
+     "comment": "the grader sets the threshold before any counted data; it never moves after"},
+    {"id": "b2", "what": "the CI lower bound of the delta is above 0: the answers beat the null", "kind": "ship"}
+  ],
+  "vetoes": [
+    {"name": "padding", "what": "a repeated list counts once; a list of fewer than 3 values is skipped and counted"}
+  ],
+  "controls": [
+    {"name": "rotated_key", "expect": "the answers score at most 20 percent against the truth rotated by one unit", "void_if": "above 20"},
+    {"name": "grader_selfcheck", "expect": "the true key scores 100 and an all-wrong key 0, every run", "void_if": "either is graded wrong"},
+    {"name": "stand_in", "expect": "the artifacts come from the contract's command", "void_if": "a counted run graded the lane's stand-in"},
+    {"name": "blast_radius", "expect": "git status is clean after the run", "void_if": "the run changed the checkout"}
+  ],
+  "decision_rule": {
+    "VOID": "any control fails, or the artifact is missing (report n = 0)",
+    "MEASURING": "units < min_n.units",
+    "FAIL": "b1 fails, or the CI of the delta lies below 0",
+    "PASS": "b1 holds and the CI of the delta lies above 0",
+    "MARGINAL": "b1 holds and the CI of the delta straddles 0"
+  },
+  "contract": {
+    "path": "",
+    "sha256": "",
+    "comment": "Once the builder's contract exists, the grader reads it and pins it here: path = \"gym/contracts/G1-artifacts.md\" (from the checkout's top), sha256 = the sha256 of that file as read. A later change to the contract is pinned by a dated amendment, never by editing this block."
+  },
+  "constants_pinned_in_code": ["MIN_VALUES = 3", "CONTROL_MAX = 20.0", "TOLERANCE = 1e-9"],
+  "amendments": []
+}

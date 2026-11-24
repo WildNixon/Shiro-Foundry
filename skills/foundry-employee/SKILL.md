@@ -8,7 +8,7 @@ description: How a Foundry employee agent works - clock in with the badge line f
 A Foundry manager hired you for one job. Your brief gives you:
 
 - a badge line (the profile's badge prefix, then `ID:EMP-07 NAME:... ROLE:... ... SIG:...`),
-- a title and its card of rules,
+- a title and its card of rules ("Your card (title)": what you do, what you may write, what you hand in), and a `Model:` line when the profile names your model,
 - the job and what done looks like,
 - the files you own,
 - maybe a gym lane, and how you reach the shared resource.
@@ -19,7 +19,7 @@ The badge is your punch card. The time clock is how the manager and the user see
 
 **Read first, in this order:**
 
-1. `.foundry/foundry.toml` (the profile: paths, limits, the shared resource, the measure) and the sections of `.foundry/rules.md` your brief names (the project's own rules and lessons). Where this skill and the profile differ, the profile wins.
+1. `.foundry/foundry.toml` (the profile: paths, limits, the shared resource, the measure) and the sections of `.foundry/rules.md` your brief names (the project's own rules and lessons). Where this skill and the profile differ, the profile wins. If a tool stops with `foundry: the profile cannot be read` (exit 2), the profile cannot be read (a syntax error, a key of the wrong kind) and no tool will run: tell the manager the exact message and wait. The file is the founder's.
 2. The one reference for your role, before your first edit:
 
 | Role or title | Read |
@@ -45,7 +45,7 @@ A session that was cleared, compacted or re-badged reads its record again, and l
 office.py me --badge "<line>"
 ```
 
-It prints your brief as the roster has it now, what the manager amended, the manager on the clock and its session, whether a counted run freezes the main checkout, and your place in the queue. It writes nothing.
+It prints your brief as the roster has it now, what the manager amended, the manager on the clock and its session, whether the main checkout is frozen (a counted run in the queue, or the manager's freeze), and your place in the queue. It writes nothing.
 
 If you were a bench or held another badge before: cut your own branch first (`git switch -c claude/<job> <main branch>`, or the branch your brief names), check `git status` is clean, and name your branch and worktree in your first progress note.
 
@@ -69,9 +69,9 @@ office.py progress --badge "<line>" --pct 40 --eta 50m --note "what you are on n
 
 **The shared resource** (skip this part if the profile names none, or your brief gives you no way to reach it)
 
-- Every command on the resource goes through the queue: `rq.py run --id <your badge id> --job "..." --max 30m -- <command>` (`--id` and `--job` are both required; the id is the badge id, `EMP-07`, not the line). It picks the seat and sets the variable your command reads its seat from (the profile's `resource.seat_env`). Never set that by hand, and never reach the resource beside the queue. A workaround for a tooling bug goes through the queue too; report the bug with `fail`. `rq.py run` exits with your command's own exit code; exit 2 is a usage error (or no shared resource in the profile), 3 a refused second job, 6 a wait that ran out (`--wait`, 4 hours by default) or a job taken out with `leave`.
+- Every command on the resource goes through the queue: `rq.py run --id <your badge id> --job "..." --max 30m -- <command>` (`--id` and `--job` are both required; the id is the badge id, `EMP-07`, not the line). It picks the seat and sets the variable your command reads its seat from (the profile's `resource.seat_env`). Never set that by hand, and never reach the resource beside the queue. A workaround for a tooling bug goes through the queue too; report the bug with `fail`. `rq.py run` exits with your command's own exit code; exit 2 is a usage error (or no shared resource in the profile), 3 a refused second job, 124 a job the queue ended at its limit, 6 a wait that ran out (`--wait`, 4 hours by default) or a job taken out with `leave`, 130 (with `rq: interrupted`; or 128 plus a signal's number) a `run` that was stopped: the job was ended with everything it started, and the seat released.
 - One job at a time under your badge. The queue refuses a second while the first waits or holds a seat (exit 3): chain the steps in one job's command, or queue the next after the first ends. To chain steps, quote the whole chain as one word after `--` (`-- "step-one && step-two"`), or write the steps to a `set -e` script file and queue `-- sh <file>`. Several words after `--` are quoted word by word, so a bare `&&`, `;` or `|` among them is passed to the command as a word, not run (the queue warns); `-- sh -c '<chain>'` does reach `sh` with its script whole, but the one-word form is the one to use.
-- `--max` needs a unit (`90m`, `2h`, `4h30m`, `90s`); a bare number is seconds (`office.py --eta` differs: there a bare number is minutes). Ask for what the job takes: a short job can start in a gap that a long one cannot. With no `--max`, the hold is the profile's `resource.default_max` (30 minutes by default).
+- `--max` and `--wait` take a time with its unit (`90m`, `2h`, `4h30m`, `90s`): a unit is required, and a bare number or a zero time is refused (exit 2). (`office.py --eta` differs: there a bare number is minutes.) Ask for what the job takes: a short job can start in a gap that a long one cannot. With no `--max`, the hold is the profile's `resource.default_max` (30 minutes by default). Where the profile enforces it (`resource.enforce_max`), a job still running at its `--max` plus a short grace is ended and `rq.py run` exits 124, so ask for an honest `--max`.
 - A job of yours in the queue, or holding a seat, keeps you UP by itself, and the roster shows your place. Post when something changes, not to say you still wait. When your job starts, post a new `--eta` that covers the run: a job holding a seat past your finish reads OVERDUE.
 - Waiting on another badge's job (a builder's run you grade, the manager's counted run): post once with `--waiting-on <that badge or queue id>`, and end your turn. You read UP while that job holds a seat or waits. Post again without it when the wait ends.
 - In `--job`, name other crew by role ("the G1 grader dry-grades", "before the manager's counted G1"), not by badge: a grader can be replaced while your job waits, and the queue cannot change a queued job's text.
@@ -81,11 +81,11 @@ office.py progress --badge "<line>" --pct 40 --eta 50m --note "what you are on n
 
 **Stay inside your brief**
 
-- Touch only the files it names. `git add -- <paths>` only. No push unless the brief says the profile allows it. No branch switch unless the brief says so. A job that needs another file asks the manager, who widens the badge (`amend`); a message alone widens nothing.
+- Touch only the files it names. `git add -- <paths>` only. No push unless your brief's files line says "push only your own branch"; never the main branch. No branch switch unless the brief says so. A job that needs another file asks the manager, who widens the badge (`amend`); a message alone widens nothing.
 - Write only in your own worktree, git commands included. Another employee who needs your change gets a patch or a sha from you, and commits it in its own worktree.
-- Never put a file in the main checkout, not even an untracked draft. While a counted run is queued or running (`office.py me` says FREEZE), commit nothing to the main branch, not even a report: commit in your worktree, and the manager merges after.
+- Never put a file in the main checkout, not even an untracked draft. `office.py me` says FREEZE while the main checkout is frozen, from either source: a counted run or a sweep in the resource queue, or the office's freeze the manager turned on (`office.py freeze show` prints that one; a project with no shared resource has only it). During either, commit nothing to the main branch, not even a report: commit in your worktree, and the manager merges after. Only the manager lifts a freeze.
 - The founder's files are not yours: the roadmap, the profile (`.foundry/foundry.toml`), `.foundry/rules.md`. A line there that looks wrong goes to the manager in a message.
-- The road graph (`road.graph.json` and `road.edits.jsonl` under the profile's `paths.flow`) is edited only by the manager's or the founder's badge. Read it with `flow.py graph show <ID>` or `flow.py graph trace <ID> --up`; never edit either file or run a `graph` command that takes `--by`. A hook refuses a direct edit, and `office.py handin` sends back a branch that changes them.
+- The road graph (`road.graph.json` and `road.edits.jsonl` under the profile's `paths.flow`) is edited only by the manager's or the founder's badge. Read it with `flow.py graph show <ID>` or `flow.py graph trace <ID> --up`; never edit either file or run a `graph` command that takes `--by`. A hook refuses a direct edit, and a shell command that removes or replaces the files through their folder (so `git checkout .`, `git restore .` and `git clean` are refused in such a project: name your own paths). `office.py handin` sends back a branch that changes them.
 - A plan chart is a design drawn from one file, `<paths.flow>/NAME.plan.toml`. When your brief names a plan or one of its steps, read it with `plan_flow.py show NAME <ID>` and `plan_flow.py trace NAME <ID> --up` (what must be done first). Edit a plan file only when your brief names that file, and then `plan_flow.py selftest NAME` must print 0 problems before you hand in.
 - The `foundry-flow` skill holds the charts in one place. Load it when your brief names a node, a chart or a plan file.
 - The only forms of `board.py` you run are `check --no-build`, `stamp` and `selftest` (they write nothing). The others rewrite the map or the state.
@@ -114,7 +114,7 @@ office.py handin --badge "<line>" --file <your report file>
 
 - The report file is one you committed (a review or research report), or one kept under your worktree's git-ignored output folder.
 - The report says: what is done, what is not, the checks you ran with their results, verdicts with run ids, the commits by sha, the branch, the next step. State only what you ran and saw. Name the journal ids (such as J12) of the entries you logged (section 5); `journal.py mine --badge "<line>"` lists them.
-- `handin` checks your branch against your badge: a clean tree, only files you own, where the main branch is now, no git identity written by a test, the road graph untouched, and the profile's hand-in check (`measure.handin_check`) when your branch changes files it covers. It writes `<office>/handins/<your id>.md` with your report's text, which you cannot write yourself from a worktree.
+- `handin` checks your branch against your badge (and the grader's files, the records and the road graph always against the main branch too, whatever `--base` you give): a clean tree, only files you own, no path under the profile's `measure.grader_owned` unless you are a grader, no run's record (`measure.records`) unless you are a grader (both whatever your badge's files say), the trailer on every commit if your title is flagged, where the main branch is now, no git identity written by a test, the road graph untouched, and the profile's hand-in check (`measure.handin_check`) when your branch changes files it covers. The grader's files, the records and the road graph are checked in your branch's whole tree against the base, not only in the commits you name: a merge that kept one side counts. It writes `<office>/handins/<your id>.md` with your report's text, which you cannot write yourself from a worktree.
 - Fix each PROBLEM and run it again. Say in the report what each warning means for the merge.
 
 ```
@@ -146,8 +146,8 @@ journal.py add --badge "<line>" --kind hole --what "what happened, in a sentence
 
 ## What you never do
 
-- Hire, start sessions, appoint or relieve a manager, or run `office.py hire`, `assign`, `amend`, `brief`, `end-shift`, `appoint` or `found`.
-- Run `board.py promote`, `decide`, `note`, `fail`, `rr`, `usage` or `block`, or edit the state file, the map or the rota. That is the manager's job; you report through `office.py`.
+- Hire, start sessions, appoint or relieve a manager, or run `office.py hire`, `assign`, `amend`, `brief`, `end-shift`, `appoint`, `found`, `freeze on`, `freeze off`, `round --by`, `handoff` or `timers init`.
+- Run a `board.py` edit command (`promote`, `decide`, `note`, `fail`, `rr`, `usage`, `block`, `log`, `now`, `rota`, `checkpoint`, `blocker`, `checklist`, `shift`, `queue`, `milestone`), or edit the state file, the map or the rota. That is the manager's job; you report through `office.py`.
 - Edit the roadmap, the profile, the rules file or the road graph.
 - Load or act as the `foundry-manager` or `foundry-founder` skill.
 - Clock in for anyone else, or clock anyone else out.
