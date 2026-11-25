@@ -304,22 +304,48 @@ def me():
     return P.tool("rq.py")
 
 
+_DEFER = 0       # > 0 while this process is inside the queue's mutex: a stop signal's exception waits for its end
+_PENDING = None  # the exception of a stop signal that arrived meanwhile; raised as the mutex is left
+
+
+def _leave_mutex():
+    """One mutex level left: raise the stop that arrived inside it, now that the mutex's folder is gone and the
+    queue file is whole."""
+    global _DEFER, _PENDING
+    _DEFER = max(0, _DEFER - 1)
+    if _DEFER == 0 and _PENDING is not None:
+        pending, _PENDING = _PENDING, None
+        raise pending
+
+
 class Mutex:
+    """The queue's mutex (the folder rq.mutex in the office). A stop signal that arrives while this process holds
+    it, or is taking or leaving it, is held back until it is left: raised in the middle, it would leave the folder
+    behind (every other queue command then waits 30 seconds for it to go stale) or the queue's bookkeeping half
+    done (an entry written and not yet known as this process's own)."""
+
     def __enter__(self):
-        self.dir = office() / "rq.mutex"
-        self.dir.parent.mkdir(parents=True, exist_ok=True)
-        for _ in range(400):
-            try:
-                self.dir.mkdir()
-                return self
-            except FileExistsError:
+        global _DEFER
+        _DEFER += 1
+        try:
+            self.dir = office() / "rq.mutex"
+            self.dir.parent.mkdir(parents=True, exist_ok=True)
+            for _ in range(400):
                 try:
-                    if time.time() - self.dir.stat().st_mtime > 30:
-                        self.dir.rmdir()
-                        continue
-                except OSError:
-                    pass
-                time.sleep(0.05)
+                    self.dir.mkdir()
+                    return self
+                except FileExistsError:
+                    try:
+                        if time.time() - self.dir.stat().st_mtime > 30:
+                            self.dir.rmdir()
+                            continue
+                    except OSError:
+                        pass
+                    time.sleep(0.05)
+        except BaseException:
+            _leave_mutex()
+            raise
+        _leave_mutex()
         raise SystemExit("rq: the queue's mutex is stuck; ask the manager")
 
     def __exit__(self, *exc):
@@ -327,6 +353,7 @@ class Mutex:
             self.dir.rmdir()
         except OSError:
             pass
+        _leave_mutex()
 
 
 def read_queue():
@@ -684,16 +711,281 @@ def win_job_end(job, close_only=False):
         pass
 
 
+DIAG_ENV = "FOUNDRY_RQ_DIAG"  # when set, `run` prints `rq-diag:` lines: how its job was started and ended
+LAST = {}  # this process's last job: "start" (how the shell was put in a job object) and "end" (how it was ended)
+
+
+def diag(msg):
+    if os.environ.get(DIAG_ENV):
+        print("rq-diag: " + str(msg)[:215], flush=True)
+
+
+def diag_end(when):
+    end = LAST.get("end") or {}
+    diag(f"end {when}: {end.get('way')}")
+    diag(f"end {when}: found under the shell before the kill: {end.get('tree')}")
+    diag(f"end {when}: still alive 3 s after the kill: {end.get('alive')}")
+
+
+def _k32():
+    """(ctypes, kernel32) with the argument and result types of every call used here."""
+    import ctypes
+    from ctypes import wintypes
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    H, D, B = wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL
+    for name, res, args in (
+            ("CreateJobObjectW", H, [ctypes.c_void_p, wintypes.LPCWSTR]),
+            ("AssignProcessToJobObject", B, [H, H]),
+            ("TerminateJobObject", B, [H, wintypes.UINT]),
+            ("IsProcessInJob", B, [H, H, ctypes.POINTER(B)]),
+            ("GetCurrentProcess", H, []),
+            ("CloseHandle", B, [H]),
+            ("CreateToolhelp32Snapshot", H, [D, D]),
+            ("Process32FirstW", B, [H, ctypes.c_void_p]),
+            ("Process32NextW", B, [H, ctypes.c_void_p]),
+            ("Thread32First", B, [H, ctypes.c_void_p]),
+            ("Thread32Next", B, [H, ctypes.c_void_p]),
+            ("OpenProcess", H, [D, B, D]),
+            ("OpenThread", H, [D, B, D]),
+            ("ResumeThread", D, [H]),
+            ("TerminateProcess", B, [H, wintypes.UINT]),
+            ("GetProcessTimes", B, [H] + [ctypes.c_void_p] * 4),
+            ("WaitForSingleObject", D, [H, D])):
+        f = getattr(k, name)
+        f.restype, f.argtypes = res, args
+    return ctypes, k
+
+
+def win_in_job():
+    """True when this process is itself in a job object (a CI runner's, say), False when not, None when unknown."""
+    try:
+        ctypes, k = _k32()
+        from ctypes import wintypes
+        inside = wintypes.BOOL()
+        if not k.IsProcessInJob(k.GetCurrentProcess(), None, ctypes.byref(inside)):
+            return None
+        return bool(inside.value)
+    except Exception:
+        return None
+
+
+def win_resume(proc):
+    """Let a process started suspended run; how it was done, or "" when it could not be."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        nt = ctypes.WinDLL("ntdll")
+        nt.NtResumeProcess.restype, nt.NtResumeProcess.argtypes = ctypes.c_long, [wintypes.HANDLE]
+        if nt.NtResumeProcess(int(proc._handle)) == 0:
+            return "NtResumeProcess"
+    except Exception:
+        pass
+    try:  # the documented way: each of the process's threads
+        ctypes, k = _k32()
+        from ctypes import wintypes
+
+        class THREADENTRY32(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ThreadID", wintypes.DWORD),
+                        ("th32OwnerProcessID", wintypes.DWORD), ("tpBasePri", wintypes.LONG),
+                        ("tpDeltaPri", wintypes.LONG), ("dwFlags", wintypes.DWORD)]
+
+        snap = k.CreateToolhelp32Snapshot(0x4, 0)  # TH32CS_SNAPTHREAD
+        if not snap or snap == ctypes.c_void_p(-1).value:
+            return ""
+        n = 0
+        try:
+            e = THREADENTRY32()
+            e.dwSize = ctypes.sizeof(e)
+            more = k.Thread32First(snap, ctypes.byref(e))
+            while more:
+                if e.th32OwnerProcessID == proc.pid:
+                    th = k.OpenThread(0x2, False, e.th32ThreadID)  # THREAD_SUSPEND_RESUME
+                    if th:
+                        if k.ResumeThread(th) != 0xFFFFFFFF:
+                            n += 1
+                        k.CloseHandle(th)
+                more = k.Thread32Next(snap, ctypes.byref(e))
+        finally:
+            k.CloseHandle(snap)
+        return f"ResumeThread on {n} thread(s)" if n else ""
+    except Exception:
+        return ""
+
+
+def win_start(args, env):
+    """Windows: start a job's shell inside a job object of its own; (the Popen, the job's handle or None).
+
+    The shell is started suspended, put in the job and only then let run, so everything it starts is in the job
+    from its first instruction. Assigning the job after the start (win_job) loses a race with a shell that is a
+    launcher: the bash.exe in Git's bin folder starts the real bash as a child at once, and a child started before
+    the assignment is outside the job; ending the job then ends the launcher alone, and with the launcher gone no
+    walk of parent ids from its pid finds the rest. When no job can be made or the shell cannot be put in it
+    (LAST["start"] says which call failed, with its error code), the shell runs without one and end_tree ends the
+    tree by walking it."""
+    info = {"in_job": win_in_job(), "create": None, "assign": None, "resume": None}
+    LAST["start"] = info
+    job = k = ctypes = None
+    if os.environ.get("FOUNDRY_RQ_NO_JOB"):  # for the selftest: the path taken when no job object can be had
+        info["create"] = "not tried (FOUNDRY_RQ_NO_JOB is set)"
+    else:
+        try:
+            ctypes, k = _k32()
+            job = k.CreateJobObjectW(None, None)
+            info["create"] = "ok" if job else f"failed, error {ctypes.get_last_error()}"
+        except Exception as e:
+            info["create"], job = f"failed, {type(e).__name__}: {e}", None
+    if not job:
+        # no job object: a process group of its own instead, so end_tree can send the whole group a BREAK (a walk of
+        # parent ids alone misses what a shell's child started and left: its parent's pid is gone by then)
+        info["group"] = True
+        return subprocess.Popen(args, env=env, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP), None
+    try:
+        proc = subprocess.Popen(args, env=env, creationflags=0x4)  # CREATE_SUSPENDED
+    except BaseException:
+        k.CloseHandle(job)
+        raise
+    try:
+        ok = k.AssignProcessToJobObject(job, int(proc._handle))
+        info["assign"] = "ok" if ok else f"failed, error {ctypes.get_last_error()}"
+    except Exception as e:
+        ok, info["assign"] = False, f"failed, {type(e).__name__}: {e}"
+    if not ok:
+        k.CloseHandle(job)
+        job = None  # the shell runs outside a job (and in rq's own process group): end_tree walks its tree
+    info["resume"] = win_resume(proc)
+    if not info["resume"]:
+        try:
+            proc.kill()
+            proc.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        if job:
+            k.CloseHandle(job)
+        raise OSError("the shell was started suspended and could not be let run")
+    return proc, job
+
+
+def win_tree(proc):
+    """Windows: every process whose chain of parents leads to proc, from one snapshot of the process list, each
+    opened at once: [{"pid", "exe", "handle"}]. The open handle keeps the pid from being given to another process,
+    so ending by handle later ends this process and no other. A process that says its parent is one of ours and was
+    created before the shell is left out (its parent's pid was used again). Never raises."""
+    out = []
+    try:
+        ctypes, k = _k32()
+        from ctypes import wintypes
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                        ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                        ("pcPriClassBase", wintypes.LONG), ("dwFlags", wintypes.DWORD),
+                        ("szExeFile", wintypes.WCHAR * 260)]
+
+        def created(handle):
+            t = [wintypes.FILETIME() for _ in range(4)]
+            if not k.GetProcessTimes(handle, *[ctypes.byref(x) for x in t]):
+                return None
+            return (t[0].dwHighDateTime << 32) | t[0].dwLowDateTime
+
+        snap = k.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+        if not snap or snap == ctypes.c_void_p(-1).value:
+            return out
+        kids = {}
+        try:
+            e = PROCESSENTRY32W()
+            e.dwSize = ctypes.sizeof(e)
+            more = k.Process32FirstW(snap, ctypes.byref(e))
+            while more:
+                kids.setdefault(e.th32ParentProcessID, []).append((e.th32ProcessID, e.szExeFile))
+                more = k.Process32NextW(snap, ctypes.byref(e))
+        finally:
+            k.CloseHandle(snap)
+        born = created(int(proc._handle))
+        todo, seen = [proc.pid], {proc.pid, 0}
+        while todo:
+            for pid, exe in kids.get(todo.pop(), []):
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                # PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+                h = k.OpenProcess(0x1 | 0x100000 | 0x1000, False, pid)
+                if not h:
+                    continue
+                when = created(h)
+                if born is not None and when is not None and when < born:
+                    k.CloseHandle(h)
+                    continue
+                out.append({"pid": pid, "exe": exe, "handle": h})
+                todo.append(pid)
+    except Exception:
+        pass
+    return out
+
+
+def ended_through():
+    """How the last job of this process was ended, for the rq.last note."""
+    end = LAST.get("end")
+    if not end:
+        return "no job of it was running"
+    return "ended through " + end["way"] + (f"; still alive afterwards: pid {', '.join(map(str, end['alive']))}"
+                                            if end.get("alive") else "")
+
+
 def end_tree(proc, job=None):
-    """End a job's shell and everything it started: on Windows its job object (when there is one) and the tree under
-    the shell's pid; elsewhere the process group the shell leads (run_line starts every job's shell as one). Never
-    raises."""
+    """End a job's shell and everything it started. On Windows: the processes under the shell are listed first
+    (win_tree), then the job object is ended (when there is one), then `taskkill /T /F` on the shell's pid, then
+    every listed process by its handle; the job object alone is not relied on. Elsewhere: the process group the
+    shell leads (run_line starts every job's shell as one). LAST["end"] says which way was used. Never raises."""
     try:
         if os.name == "nt":
+            tree = win_tree(proc)  # before anything is ended: once the shell is gone its children have no parent to find
+            start = LAST.get("start") or {}
             if job:
+                way = "its job object"
                 win_job_end(job)
-            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=30)
+            else:
+                why = next((f"{c}: {start[c]}" for c in ("create", "assign") if start.get(c) not in (None, "ok")), "none made")
+                way = f"no job object ({why})"
+                if start.get("group") and proc.poll() is None:
+                    # the shell leads a process group of its own: a BREAK reaches every process in it, whoever its
+                    # parent was. This process ignores BREAK meanwhile, should the console hand it one as well.
+                    import signal
+                    try:
+                        was = signal.signal(signal.SIGBREAK, signal.SIG_IGN)
+                    except (OSError, ValueError, RuntimeError):
+                        was = None
+                    try:
+                        os.kill(proc.pid, signal.CTRL_BREAK_EVENT)
+                        way += ", a BREAK to the shell's process group"
+                        time.sleep(1.0)
+                    except OSError:
+                        pass
+                    finally:
+                        if was is not None:
+                            try:
+                                signal.signal(signal.SIGBREAK, was)
+                            except (OSError, ValueError, RuntimeError):
+                                pass
+            way += f", then a walk of the {len(tree)} process(es) found under the shell (pid {proc.pid})"
+            LAST["end"] = {"way": way, "tree": [f"{t['pid']}:{t['exe']}" for t in tree], "alive": []}
+            try:
+                subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True, timeout=30,
+                               stdin=subprocess.DEVNULL)
+            except (OSError, subprocess.SubprocessError):
+                pass
+            try:
+                _ctypes, k = _k32()
+                for t in tree:
+                    k.TerminateProcess(t["handle"], 124)
+                for t in tree:
+                    if k.WaitForSingleObject(t["handle"], 3000) != 0:  # 0: the process has ended
+                        LAST["end"]["alive"].append(t["pid"])
+                    k.CloseHandle(t["handle"])
+            except Exception:
+                pass
         else:
+            LAST["end"] = {"way": "its process group (TERM, then KILL)", "tree": [], "alive": []}
             import signal
             # TERM to the group, then KILL to the group after the grace whether or not the shell itself has ended: a
             # child that ignores TERM must not outlive the seat. The KILL is left out only when the group is seen
@@ -754,10 +1046,15 @@ def on_stop_signals():
     import signal
 
     def stop(signum, _frame):
+        global _PENDING
         quiet_signals()
-        if signum == signal.SIGINT:
-            raise KeyboardInterrupt
-        raise SystemExit(128 + signum)
+        exc = KeyboardInterrupt() if signum == signal.SIGINT else SystemExit(128 + signum)
+        if _DEFER > 0:
+            _PENDING = exc  # inside the queue's mutex: raised as the mutex is left (_leave_mutex)
+            diag(f"stop signal {signum} held back until the mutex is left")
+            return
+        diag(f"stop signal {signum} raised at once")
+        raise exc
 
     for sig in [signal.SIGINT] + stop_signals():
         try:
@@ -789,8 +1086,11 @@ def run_line(sh, line, env, deadline=None, said=None):
     124. An interrupt or a stop signal that reaches this process ends the line, tree and all, before it is passed
     on. (A line in a session of its own does not get the terminal's Ctrl+C itself: this process gets it and ends
     the line.) `said` is printed once the shell has been started, and not when it could not be."""
-    proc = subprocess.Popen([sh, "-c", line], env=env, **({} if os.name == "nt" else {"start_new_session": True}))
-    job = win_job(proc) if os.name == "nt" else None
+    if os.name == "nt":
+        proc, job = win_start([sh, "-c", line], env)
+        diag(f"start rq={os.getpid()} shell={proc.pid} {LAST.get('start')}")
+    else:
+        proc, job = subprocess.Popen([sh, "-c", line], env=env, start_new_session=True), None
     try:
         if said:
             print(said, flush=True)
@@ -798,6 +1098,7 @@ def run_line(sh, line, env, deadline=None, said=None):
             left = 1.0 if deadline is None else deadline - time.time()
             if left <= 0:
                 end_tree(proc, job)
+                diag_end("at the limit")
                 return 124, True
             try:
                 code = proc.wait(timeout=min(left, 1.0))
@@ -809,20 +1110,35 @@ def run_line(sh, line, env, deadline=None, said=None):
     except BaseException:  # an interrupt of this process must not leave the job running
         quiet_signals()
         end_tree(proc, job)
+        diag_end("after a stop")
         raise
 
 
 def drop_own(who):
     """After a stop while queueing: take this process's own queue entry out and free the holds it took. Never
-    raises."""
-    try:
-        if QUEUED:
+    raises; what it could not do, it says."""
+    diag(f"drop_own: queued={QUEUED} hold_token={HOLD_TOKEN} mutex_there={(office() / 'rq.mutex').is_dir()}")
+    if QUEUED:
+        try:
             with Mutex():
                 write_queue([e for e in read_queue() if e["id"] != who])
+        except (Exception, SystemExit) as e:
+            # the mutex could not be had (another process holds it, or left it behind): the entry must still go,
+            # or this id reads as waiting for two more minutes; the write is one atomic replace
+            print(f"rq: {who}: the queue's mutex could not be had while leaving the queue ({type(e).__name__}: {e}); "
+                  "leaving it without", flush=True)
+            try:
+                write_queue([e for e in read_queue() if e["id"] != who])
+            except (Exception, SystemExit) as e2:
+                print(f"rq: {who} is still in the queue ({type(e2).__name__}: {e2}); it drops out 2 minutes after "
+                      f"its last poll, or take it out with `{me()} leave --id {who}`", flush=True)
+    try:
         if HOLD_TOKEN and any((holder(s) or {}).get("token") == HOLD_TOKEN for s in seats()):
             do_release(who, "stopped before its job started", "", token=HOLD_TOKEN)
-    except (Exception, SystemExit):
-        pass
+    except (Exception, SystemExit) as e:
+        print(f"rq: {who}: could not release its hold after the stop ({type(e).__name__}: {e}); the manager frees it "
+              "with force-release", flush=True)
+    diag(f"drop_own done: in the queue now: {[e.get('id') for e in read_queue()]}")
 
 
 def run(a):
@@ -839,12 +1155,12 @@ def run(a):
     if rc:
         return rc
     code, ended, deadline, cut_by = 1, False, None, ""
-    if enforcing(a):
-        grace = max_grace()
-        deadline = ((holder(seat) or {}).get("since") or time.time()) + a.max + grace
-        print(f"rq: --max is enforced: the job is ended at {time.strftime('%H:%M:%S', time.localtime(deadline))} "
-              f"({span(a.max)} plus {span(grace)} grace) if it still runs", flush=True)
-    try:
+    try:  # from here the seat is held: whatever happens, the `finally` releases it
+        if enforcing(a):
+            grace = max_grace()
+            deadline = ((holder(seat) or {}).get("since") or time.time()) + a.max + grace
+            print(f"rq: --max is enforced: the job is ended at {time.strftime('%H:%M:%S', time.localtime(deadline))} "
+                  f"({span(a.max)} plus {span(grace)} grace) if it still runs", flush=True)
         prev_id, prev_note, prev_touched = last_parts(seat)
         env = dict(os.environ)
         # the caller's token marks this run's own `started` and `finished` lines; the job is not given it, so
@@ -893,9 +1209,10 @@ def run(a):
         cut = f" = 0x{code & 0xFFFFFFFF:08X}: killed, not finished (host shutdown or reboot?)" if not 0 <= code <= 255 else ""
         if ended:
             note = (f"{a.job} (ended at its limit: still running at --max {span(a.max)} plus {span(max_grace())} "
-                    "grace; exit 124; what it left in the seat is unknown)")
+                    f"grace; exit 124; what it left in the seat is unknown; {ended_through()})")
         elif cut_by:
-            note = f"{a.job} (stopped by {cut_by} sent to the queue; what it left in the seat is unknown)"
+            note = (f"{a.job} (stopped by {cut_by} sent to the queue; what it left in the seat is unknown; "
+                    f"{ended_through()})")
         else:
             note = f"{a.job} (exit {code}{cut})"
         do_release(a.id, note, a.touched, token=HOLD_TOKEN)
@@ -998,7 +1315,26 @@ def selftest():
     keep_res, keep_token = RES, HOLD_TOKEN
     keep_env = {k: os.environ.get(k) for k in ("FOUNDRY_PATHS_OFFICE",)}
     tmp = Path(tempfile.mkdtemp(prefix="foundry-rq-selftest-"))
-    ok, bad, skipped = [], [], []
+    ok, bad, skipped, diags = [], [], [], []
+
+    def diag_case(case, cond, child_out, **facts):
+        """When a case failed: what a reader of the CI annotation needs, one short line each."""
+        if cond:
+            return
+        if not diags:
+            diags.append("python " + " ".join(sys.version.split()))
+            diags.append(f"sys.executable={sys.executable}")
+            diags.append(f"realpath={os.path.realpath(sys.executable)}")
+            diags.append(f"sys._base_executable={getattr(sys, '_base_executable', None)}")
+            diags.append(f"selftest pid={os.getpid()} in a job object: {win_in_job() if os.name == 'nt' else 'n/a'}; "
+                         f"shell={shell()}")
+        diags.append(f"[{case}] " + "; ".join(f"{k}={v}" for k, v in facts.items()))
+        lines = [l.strip() for l in str(child_out).splitlines() if l.strip()]
+        for l in lines:
+            if l.startswith("rq-diag: "):
+                diags.append(f"[{case}] {l[9:]}")
+        for l in [x for x in lines if not x.startswith("rq-diag: ")][-3:]:
+            diags.append(f"[{case}] the child's last lines: {l}")
 
     def expect(what, cond, detail=""):
         (ok if cond else bad).append(what + ("" if cond else f": {detail}"))
@@ -1336,16 +1672,40 @@ def selftest():
             prof.write_text('[resource]\nname = "bench"\nseats = ["a", "b"]\nmax_grace = "1s"\n', encoding="utf-8")
             t = time.time()
             rc, out = cli("run", "--id", "EMP-06", "--job", "slow", "--max", "1s", "--enforce-max", "--",
-                          'sleep 30; printf done > "$RQ_T/slow.txt"', FOUNDRY_PROFILE=str(prof))
+                          'sleep 30; printf done > "$RQ_T/slow.txt"', FOUNDRY_PROFILE=str(prof), FOUNDRY_RQ_DIAG="1")
             took = time.time() - t
             last_b = (off2 / "rq.last.b").read_text(encoding="utf-8") if (off2 / "rq.last.b").exists() else ""
+            good = (rc == 124 and took < 20 and not (off2 / "rq.lock.b").is_dir()
+                    and "ended at its limit" in last_b and "--max 1s plus 1s grace" in last_b)
             expect("run --enforce-max ends a job still going at --max plus resource.max_grace: exit 124, the seat "
-                   "released, rq.last says it was ended at its limit",
-                   rc == 124 and took < 20 and not (off2 / "rq.lock.b").is_dir()
-                   and "ended at its limit" in last_b and "--max 1s plus 1s grace" in last_b, (rc, took, last_b, out))
+                   "released, rq.last says it was ended at its limit", good, (rc, took, last_b, out))
+            diag_case("enforce-max", good, out, exit=rc, expected=124, elapsed_s=round(took, 1),
+                      seat_b_held=(off2 / "rq.lock.b").is_dir(), rq_last=last_b.splitlines()[0][-150:] if last_b else None)
+            expect("the rq.last note of a job ended at its limit says which way it was ended",
+                   "ended through " in last_b, last_b)
             time.sleep(1.5)
-            expect("... and what the job started is ended with it (nothing ran after the sleep)",
-                   not (off2 / "slow.txt").exists())
+            good = not (off2 / "slow.txt").exists()
+            expect("... and what the job started is ended with it (nothing ran after the sleep)", good)
+            diag_case("enforce-max, what the job started", good, out, exit=rc, elapsed_s=round(took, 1),
+                      note="slow.txt was written: the job's `sleep 30` ran to its end after the kill")
+            if os.name == "nt":
+                expect("on Windows the job's shell is put in its job object before it runs (started suspended)",
+                       "'create': 'ok', 'assign': 'ok', 'resume': 'NtResumeProcess'" in out
+                       and "its job object, then a walk of the" in last_b, (out, last_b))
+                (off2 / "slow.txt").unlink(missing_ok=True)
+                t = time.time()
+                rc, out = cli("run", "--id", "EMP-06", "--job", "slow", "--max", "1s", "--enforce-max", "--",
+                              '(sleep 12; printf done > "$RQ_T/slow.txt") & wait', FOUNDRY_PROFILE=str(prof),
+                              FOUNDRY_RQ_DIAG="1", FOUNDRY_RQ_NO_JOB="1")
+                took = time.time() - t
+                last_b = (off2 / "rq.last.b").read_text(encoding="utf-8") if (off2 / "rq.last.b").exists() else ""
+                time.sleep(max(0.0, t + 13.5 - time.time()))
+                good = (rc == 124 and took < 11 and "no job object (" in last_b and not (off2 / "slow.txt").exists()
+                        and "still alive 3 s after the kill: []" in out)
+                expect("with no job object the tree under the shell is walked and ended all the same (exit 124), and "
+                       "rq.last says no job object was used", good, (rc, took, last_b, out))
+                diag_case("enforce-max without a job object", good, out, exit=rc, elapsed_s=round(took, 1),
+                          rq_last=last_b.splitlines()[0][-150:] if last_b else None)
             prof.write_text('[resource]\nname = "bench"\nseats = ["a", "b"]\nmax_grace = "1s"\nenforce_max = true\n',
                             encoding="utf-8")
             rc, out = cli("run", "--id", "EMP-06", "--job", "quick", "--max", "20s", "--", "exit 3",
@@ -1394,7 +1754,7 @@ def selftest():
                 with open(log, "wb") as lf:
                     return subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *args], stdout=lf,
                                             stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                            env=dict(env, FOUNDRY_PROFILE=str(prof)), **new_group)
+                                            env=dict(env, FOUNDRY_PROFILE=str(prof), FOUNDRY_RQ_DIAG="1"), **new_group)
 
             def until(cond, limit):
                 end = time.time() + limit
@@ -1461,6 +1821,7 @@ def selftest():
             for seat in ("a", "b"):
                 cli("take", "--id", f"EMP-1{seat.upper()}", "--job", "by hand", "--seat", seat, "--wait", "5s")
             log = tmp / "stopw.log"
+            t = time.time()
             proc = started(log, "run", "--id", "EMP-08", "--job", "waits", "--wait", "15s", "--", "true")
             up = until(lambda: any(e.get("id") == "EMP-08" for e in (json.loads(text_of(off2 / "rq.queue.json") or "[]"))), 30)
             try:
@@ -1476,9 +1837,16 @@ def selftest():
             if os.name == "nt" and rc == 6:
                 skipped.append("a BREAK sent to a waiting `run`: this host delivered none (no console is attached)")
             else:
+                want = 128 + (signal.SIGBREAK if os.name == "nt" else sigs[0])
+                good = (up and rc == want and "EMP-08" not in q_left
+                        and (off2 / "rq.lock").is_dir() and (off2 / "rq.lock.b").is_dir())
                 expect("a stop signal sent to a `run` that still waits takes it out of the queue; the seats' holders stay",
-                       up and rc == 128 + (signal.SIGBREAK if os.name == "nt" else sigs[0]) and "EMP-08" not in q_left
-                       and (off2 / "rq.lock").is_dir() and (off2 / "rq.lock.b").is_dir(), (up, rc, q_left, text_of(log)))
+                       good, (up, rc, q_left, text_of(log)))
+                diag_case("stop while waiting", good, text_of(log), exit=rc, expected=want, seen_queued=up,
+                          queue_after=q_left, waiter_pid=proc.pid, elapsed_s=round(time.time() - t, 1),
+                          mutex_left=(off2 / "rq.mutex").is_dir(),
+                          seats_held=[(off2 / n).is_dir() for n in ("rq.lock", "rq.lock.b")])
+                expect("... and the queue's mutex is not left behind by the stop", not (off2 / "rq.mutex").is_dir())
             for seat in ("a", "b"):
                 cli("release", "--id", f"EMP-1{seat.upper()}", "--note", "selftest")
 
@@ -1512,6 +1880,8 @@ def selftest():
         print(f"  skip {x}")
     for x in bad:
         print(f"  FAIL {x}")
+    for x in diags:  # short lines, each one whole in a CI annotation
+        print("DIAG FAIL-info: " + x[:230])
     print(f"rq selftest: {len(ok)} ok, {len(bad)} failed" + (f", {len(skipped)} skipped" if skipped else ""))
     return 1 if bad else 0
 
