@@ -135,7 +135,7 @@ runs each tool's selftest and the test files. All of them work in temp folders. 
 
 ## Status
 
-Version 0.2.0. The tools are ports of ones in daily use, extended for general use; the general forms of the skills have not yet been run on a new project from a clean start by anyone but their authors. [Known holes](docs/HOLES.md) lists what is unverified, not enforced or missing, and [the changelog](CHANGELOG.md) what changed.
+Version 0.2.1. The tools are ports of ones in daily use, extended for general use; the general forms of the skills have not yet been run on a new project from a clean start by anyone but their authors. [Known holes](docs/HOLES.md) lists what is unverified, not enforced or missing, and [the changelog](CHANGELOG.md) what changed.
 
 ## License
 

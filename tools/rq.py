@@ -812,7 +812,7 @@ def win_resume(proc):
         return ""
 
 
-def win_start(args, env):
+def win_start(args, env, **more):
     """Windows: start a job's shell inside a job object of its own; (the Popen, the job's handle or None).
 
     The shell is started suspended, put in the job and only then let run, so everything it starts is in the job
@@ -821,7 +821,7 @@ def win_start(args, env):
     the assignment is outside the job; ending the job then ends the launcher alone, and with the launcher gone no
     walk of parent ids from its pid finds the rest. When no job can be made or the shell cannot be put in it
     (LAST["start"] says which call failed, with its error code), the shell runs without one and end_tree ends the
-    tree by walking it."""
+    tree by walking it. `more` goes to Popen as it is (cwd, stdout, stderr, stdin)."""
     info = {"in_job": win_in_job(), "create": None, "assign": None, "resume": None}
     LAST["start"] = info
     job = k = ctypes = None
@@ -838,9 +838,9 @@ def win_start(args, env):
         # no job object: a process group of its own instead, so end_tree can send the whole group a BREAK (a walk of
         # parent ids alone misses what a shell's child started and left: its parent's pid is gone by then)
         info["group"] = True
-        return subprocess.Popen(args, env=env, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP), None
+        return subprocess.Popen(args, env=env, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP, **more), None
     try:
-        proc = subprocess.Popen(args, env=env, creationflags=0x4)  # CREATE_SUSPENDED
+        proc = subprocess.Popen(args, env=env, creationflags=0x4, **more)  # CREATE_SUSPENDED
     except BaseException:
         k.CloseHandle(job)
         raise

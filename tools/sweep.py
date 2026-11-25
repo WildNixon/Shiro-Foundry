@@ -79,6 +79,7 @@ the id takes it over or the manager lifts it.
 
 What it writes, all under --out:
   source.txt    id, queued_at, started_at, started, lanes, resource; then what a moved start selected, a refusal,
+                on Windows with no resource `job_object <lane>: ...` (how the lane's command was put in one),
                 the freeze it wrote, and at the end `ended <time> exit <n>` (or `ended <time> interrupted`)
   started.tsv   lane, start time, HEAD: one line before each lane runs
   runs.tsv      lane, exit code, start, end, seconds, and a note when the queue did not run the lane, the lane
@@ -467,11 +468,16 @@ def run_lane(a, lane, line, out, use_rq, state=None):
     log = out / f"{lane}.log"
     with open(log, "wb") as f:
         try:
-            proc = subprocess.Popen(cmd, cwd=str(P.main), stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                                    env=env, **more)
+            io = {"cwd": str(P.main), "stdout": f, "stderr": subprocess.STDOUT, "stdin": subprocess.DEVNULL}
+            if os.name == "nt" and not use_rq:
+                # in its job object before its first instruction (rq.win_start), so a stop ends all it started
+                proc, job = rq.win_start(cmd, env, **io)
+                start = rq.LAST.get("start") or {}
+                state["job_object"] = f"create {start.get('create')}, assign {start.get('assign')}"
+            else:
+                proc, job = subprocess.Popen(cmd, env=env, **io, **more), None
         except OSError as e:
             return 127, f"not run (cannot start: {e})"
-        job = rq.win_job(proc) if os.name == "nt" and not use_rq else None
         try:
             beat = 0.0
             while True:
@@ -688,7 +694,11 @@ def cmd_run(a):
             with open(out / "started.tsv", "a", encoding="utf-8") as f:
                 f.write(f"{lane}\t{stamp(t0)}\t{start}\n")
             say(f"{stamp(t0)[11:]} {lane}: {counted.replace('<lane>', lane)}")
-            rc, note = run_lane(a, lane, counted.replace("<lane>", lane), out, use_rq, state)
+            try:
+                rc, note = run_lane(a, lane, counted.replace("<lane>", lane), out, use_rq, state)
+            finally:
+                if state.get("job_object"):  # Windows, no resource: how the lane's command was put in a job object
+                    record(f"job_object {lane}: {state.pop('job_object')}")
             t1 = time.time()
             # the tree is read again after every lane: a change during the last lane is found too, and the lane it
             # happened under carries the mark
@@ -1319,6 +1329,10 @@ def selftest():
                    "signal, and source.txt ends `interrupted`, never `exit 0`",
                    up and rc == want and "\nended " in src and src.rstrip().endswith("interrupted") and "exit 0" not in src,
                    (up, rc, want, src, (tmp / "i1.log").read_text(encoding="utf-8", errors="replace")))
+            if os.name == "nt":
+                expect("on Windows, with no resource, the lane's command is put in its job object before it runs "
+                       "(rq.win_start), and source.txt says so",
+                       "\njob_object G1: create ok, assign ok\n" in src, src)
             expect("... its freeze was on during the lane and is lifted by the stop",
                    on == "MGR-9" and not (s.office / "freeze.json").exists(), on)
             time.sleep(max(0.0, t + 7.5 - time.time()))

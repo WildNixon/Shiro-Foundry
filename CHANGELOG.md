@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 (2026-11-24)
+
+The first release with a green CI run on every system.
+
+- `rq.py` on Windows: a job's shell is now created suspended, placed in its job object and then resumed, so nothing it starts can be outside the job. Before, the job object was assigned after the shell had started, and on GitHub's Windows runner with Python 3.14 an enforced time limit released the seat while what the job had started ran on. Without a job object the tree is snapshotted and ended by handle. `sweep.py` starts a lane the same way when there is no shared resource.
+- `rq.py`: a stop signal that arrives while the queue's mutex is held is raised when the mutex is left, so a stopped waiter always leaves the queue and never leaves the mutex behind.
+- `tests/run_all.py` prints each failing test's output as a CI annotation.
+- CI: all 12 jobs pass (Linux, macOS and Windows; Python 3.11, 3.12, 3.13, 3.14). This was the first run of the queue's Linux and macOS process-group and signal code.
+
 ## 0.2.0 (2026-11-24)
 
 The first published release. It closes most of what 0.1.0's own audit found.

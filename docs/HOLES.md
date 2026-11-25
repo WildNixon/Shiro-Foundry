@@ -1,11 +1,11 @@
 # Known holes
 
-What is not verified, not enforced or still missing at 0.2.0, most important first. The first audit's list (0.1.0) had 28 items; the changelog says which were closed and how. What is left is here, with nothing rounded up.
+What is not verified, not enforced or still missing at 0.2.1, most important first. The first audit's list (0.1.0) had 28 items; the changelog says which were closed and how. What is left is here, with nothing rounded up.
 
 ## Not verified
 
 1. **Nobody but the authors has run the skills on a new project.** The skills are conversions of ones in daily use on two projects, and every command they name was checked against the tools, most by running it. That is not the same as a fresh manager session following the text with no other knowledge. An earlier rewrite of the same skills lost to the original on a held-out test (it led with routine steps ahead of the key action and padded its answers). A project that already runs working skills should test these on real incidents, scored on the first action and on precision, before switching.
-2. **Linux and macOS were not run by hand.** Development was on Windows with Git Bash. The whole suite passes there on Python 3.11, 3.12 and 3.14. CI runs it on Linux, macOS and Windows for 3.11 to 3.14; the badge on the README is the current answer. The queue's process-group code for Linux and macOS (ending a job and what it started, releasing the seat on a stop signal) was written and reviewed by reading; CI is its first run.
+2. **Linux and macOS run only in CI.** Development was on Windows with Git Bash. CI runs the whole suite on Linux, macOS and Windows for Python 3.11 to 3.14 and all 12 jobs pass; the badge on the README is the current answer. Nobody has used the tools by hand on Linux or macOS, and the tests on those systems are the queue's and the sweep's own cases, not a working day.
 3. **The chart pages were run in two browsers, not every case.** Every view, node and trace button was clicked on a plan page and a workflow page with no script error, and a structural check of both runs with the tests. Not exercised: dragging, wheel zoom, the light theme.
 4. **The diagrams in the documentation** (Mermaid) were written, not rendered.
 

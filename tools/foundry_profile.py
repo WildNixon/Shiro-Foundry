@@ -34,7 +34,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 
 DEFAULTS = {
     "project": "",                 # the project's name as people say it; empty: the main checkout's folder name
