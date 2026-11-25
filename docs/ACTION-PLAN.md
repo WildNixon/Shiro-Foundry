@@ -2,7 +2,7 @@
 
 A third review of the whole repository at `c75907b` (0.2.1), done 2026-11-25 on Linux with Python 3.13. The suite passed before the review (23 of 23, 5 min 21 s). Four reviewers read the code in parallel and reproduced what they could in scratch projects; nothing in the repository was changed.
 
-**60 findings, none already in [HOLES.md](HOLES.md).** 47 were reproduced (marked **R**), 13 are from reading only (marked **S**). Nothing below has been fixed yet.
+**60 findings, none already in [HOLES.md](HOLES.md).** 47 were reproduced (marked **R**) and 13 are from reading only (9 marked **S**, plus the 4 upkeep items in plan 9). Nothing below has been fixed yet.
 
 The plans are in the order to do them. Each is sized to be one branch.
 
