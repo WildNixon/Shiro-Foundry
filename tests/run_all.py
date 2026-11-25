@@ -51,6 +51,11 @@ def main(argv):
         if code != 0:
             failed.append(name)
             print("\n".join("     " + line for line in out.strip().splitlines()[-25:]))
+            if os.environ.get("GITHUB_ACTIONS"):  # an annotation anyone can read, with what failed
+                lines = out.strip().splitlines()
+                tail = [x for x in lines if "FAIL" in x or "Traceback" in x or "Error" in x][-12:] or lines[-12:]
+                text = "%0A".join(x.strip()[:300].replace("%", "%25").replace("\r", "") for x in tail)
+                print(f"::error title={name} (exit {code})::{text}", flush=True)
             if "--keep-going" not in argv:
                 break
     print(f"\n{len(runs) - len(failed)} of {len(runs)} passed" + (f"; failed: {', '.join(failed)}" if failed else ""))
